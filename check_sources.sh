@@ -62,58 +62,54 @@ _RESET='\033[0m'
 # List of resources
 # shellcheck disable=SC2034
 _HTTP=(
-ubuntu-cloud.archive.canonical.com
-nova.cloud.archive.ubuntu.com
-nova.clouds.archive.ubuntu.com
-cloud-images.ubuntu.com
-keyserver.ubuntu.com
-archive.ubuntu.com
-security.ubuntu.com
-usn.ubuntu.com
-launchpad.net
-api.launchpad.net
-ppa.launchpad.net
-ppa.launchpadcontent.net
-jujucharms.com
-jaas.ai
-charmhub.io
-api.charmhub.io
-streams.canonical.com
-images.maas.io
-packages.elastic.co
-artifacts.elastic.co
-packages.elasticsearch.org
-
+  ubuntu-cloud.archive.canonical.com
+  nova.cloud.archive.ubuntu.com
+  cloud.archive.ubuntu.com
+  nova.clouds.archive.ubuntu.com
+  clouds.archive.ubuntu.com
+  cloud-images.ubuntu.com
+  keyserver.ubuntu.com
+  archive.ubuntu.com
+  security.ubuntu.com
+  launchpad.net
+  ppa.launchpadcontent.net
+  jujucharms.com
+  streams.canonical.com
+  public.apps.ubuntu.com
+  images.maas.io
+  packages.elastic.co
+  artifacts.elastic.co
+  packages.elasticsearch.org
 )
 
 # shellcheck disable=SC2034
 _HTTPS=(
-cloud-images.ubuntu.com
-keyserver.ubuntu.com
-contracts.canonical.com
-usn.ubuntu.com
-launchpad.net
-api.launchpad.net
-ppa.launchpad.net
-ppa.launchpadcontent.net
-jujucharms.com
-jaas.ai
-charmhub.io
-api.charmhub.io
-entropy.ubuntu.com
-streams.canonical.com
-public.apps.ubuntu.com
-login.ubuntu.com
-images.maas.io
-api.snapcraft.io
-landscape.canonical.com
-livepatch.canonical.com
-dashboard.snapcraft.io
-api.snapcraft.io
-dashboard.snapcraft.io
-packages.elastic.co
-artifacts.elastic.co
-packages.elasticsearch.org
+  cloud-images.ubuntu.com
+  keyserver.ubuntu.com
+  usn.ubuntu.com
+  launchpad.net
+  ppa.launchpadcontent.net
+  jujucharms.com
+  streams.canonical.com
+  snapcraft.io
+  images.maas.io
+  packages.elastic.co
+  artifacts.elastic.co
+  packages.elasticsearch.org
+  entropy.ubuntu.com
+  login.ubuntu.com
+  images.maas.io
+  api.jujucharms.com
+  api.snapcraft.io
+  livepatch.canonical.com
+  dashboard.snapcraft.io
+  image-registry.canonical.com
+  rocks.canonical.com
+  quay.io
+  gcr.io
+  k8s.gcr.io
+  storage.googleapis.com
+  auth.docker.io
 )
 
 ###############################################################################
@@ -153,8 +149,8 @@ HEREDOC
 # Description:
 #  Export http{,s} variables
 function _set_proxy() {
-   export http_proxy="${1}"
-   export https_proxy=$http_proxy
+  export http_proxy="${1}"
+  export https_proxy=$http_proxy
 }
 
 # _ok()
@@ -162,13 +158,13 @@ function _set_proxy() {
 # Description:
 #  Print green status code
 function _ok() {
-    printf "${_GREEN}[%s] %s${_RESET}\\n" "${1}" "OK"
+  printf "${_GREEN}[%s] %s${_RESET}\\n" "${1}" "OK"
 }
 
 # Description:
 #  Print red status code
 function _err() {
-    printf "${_RED}[%s] %s${_RESET}\\n" "${1}" "ERR"
+  printf "${_RED}[%s] %s${_RESET}\\n" "${1}" "ERR"
 }
 
 # Description:
@@ -176,25 +172,23 @@ function _err() {
 function _check_http() {
   _PROTO=$(echo "$1" | tr "[:lower:]" "[:upper:]")
   printf "\\n[ Checking %s sources ]--------------------------------------\\n" \
-     "${_PROTO}"
+    "${_PROTO}"
   _SOURCES="_${_PROTO}[@]"
 
   for _SOURCE in "${!_SOURCES}"; do
-     printf "%s: %s - " "${1}" "${_SOURCE}"
-     _RET=$( \
-        curl -s -m 5 -o /dev/null \
-        -w "%{http_code}" -I --insecure "$1"://"${_SOURCE}" || echo $?)
+    printf "%s: %s - " "${1}" "${_SOURCE}"
+    _RET=$(
+      curl -s -m 5 -o /dev/null \
+        -w "%{http_code}" -I --insecure "$1"://"${_SOURCE}" || echo $?
+    )
 
-     # Print OK if the server replies with 2xx, 3xx, 400, 404 and 405 HTTP status codes
-     if [[ "${_RET}" =~ ^2.*|^3.*|^400|^404|^405 ]]
-     then
-        _ok "${_RET}"
-     else
-        _err "${_RET}"
-     fi
+    # Print OK if the server replies with 2xx, 3xx or 4xx HTTP status codes
+    if [[ "${_RET}" =~ ^2.*|^3.*|^4.* ]]; then
+      _ok "${_RET}"
+    else
+      _err "${_RET}"
   done
 }
-
 
 ###############################################################################
 # Main
@@ -206,24 +200,21 @@ function _check_http() {
 #   Entry point for the program, handling basic option parsing and dispatching.
 function _main() {
   # Avoid complex option parsing when only one program option is expected.
-  if [[ "${1:-}" =~ ^-h|--help$  ]]
-  then
+  if [[ "${1:-}" =~ ^-h|--help$ ]]; then
     _print_help
   else
-     if [[ -n "${1:-}" ]]
-     then 
-        if [[ "${1}" =~ ^https?:\/\/.+:? ]]
-        then
-           printf "\\nChecking sources against %s proxy.\\n" "${1}"
-           _set_proxy "${1}"
-        else
-           printf "\\nERROR: Invalid proxy URL: %s\\n" "${1}"
-           _print_help
-           exit 1
-        fi
-     fi
-     _check_http "http"
-     _check_http "https"
+    if [[ -n "${1:-}" ]]; then
+      if [[ "${1}" =~ ^https?:\/\/.+:? ]]; then
+        printf "\\nChecking sources against %s proxy.\\n" "${1}"
+        _set_proxy "${1}"
+      else
+        printf "\\nERROR: Invalid proxy URL: %s\\n" "${1}"
+        _print_help
+        exit 1
+      fi
+    fi
+    _check_http "http"
+    _check_http "https"
   fi
 }
 
