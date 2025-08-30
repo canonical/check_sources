@@ -344,12 +344,12 @@ _check_single_source() {
     if [[ "$status_code" =~ ^(2[0-9][0-9]|3[0-9][0-9]|400|404|405)$ ]]; then
         _print_status "OK" "$status_code" "$url" "$response_time"
         _RESULTS+=("$url: OK [$status_code]")
-        ((_SUCCESS_COUNT++))
+        _SUCCESS_COUNT=$((_SUCCESS_COUNT + 1))
         return 0
     else
         _print_status "FAILED" "$status_code" "$url" "$response_time"
         _RESULTS+=("$url: FAILED [$status_code]")
-        ((_FAILURE_COUNT++))
+        _FAILURE_COUNT=$((_FAILURE_COUNT + 1))
         return 1
     fi
 }
@@ -532,57 +532,6 @@ _parse_options() {
                 ;;
         esac
     done
-}
-
-###############################################################################
-# Program Functions
-###############################################################################
-
-# _set_proxy()
-#
-# Description:
-#  Export http{,s} variables
-function _set_proxy() {
-  export http_proxy="${1}"
-  export https_proxy=$http_proxy
-}
-
-# _ok()
-#
-# Description:
-#  Print green status code
-function _ok() {
-  printf "${_GREEN}[%s] %s${_RESET}\\n" "${1}" "OK"
-}
-
-# Description:
-#  Print red status code
-function _err() {
-  printf "${_RED}[%s] %s${_RESET}\\n" "${1}" "ERR"
-}
-
-# Description:
-#  Check http{,s} connection to the _HTTP and _HTTPS server arrays
-function _check_http() {
-  _PROTO=$(echo "$1" | tr "[:lower:]" "[:upper:]")
-  printf "\\n[ Checking %s sources ]--------------------------------------\\n" \
-    "${_PROTO}"
-  _SOURCES="_${_PROTO}_SOURCES[@]"
-
-  for _SOURCE in "${!_SOURCES}"; do
-    printf "%s: %s - " "${1}" "${_SOURCE}"
-    _RET=$(
-      curl -s -m 5 -o /dev/null \
-        -w "%{http_code}" -I --insecure "$1"://"${_SOURCE}" || echo $?
-    )
-
-    # Print OK if the server replies with 2xx, 3xx or 4xx HTTP status codes
-    if [[ "${_RET}" =~ ^2.*|^3.*|^4.* ]]; then
-      _ok "${_RET}"
-    else
-      _err "${_RET}"
-    fi
-  done
 }
 
 ###############################################################################
