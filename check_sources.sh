@@ -49,15 +49,18 @@ IFS=$'\n\t'
 # Environment
 ###############################################################################
 
-# $_ME
-#
-# Set to the program's basename.
+# Program basename
 _ME=$(basename "${0}")
 
-# Color definition
-_GREEN='\033[0;32m'
-_RED='\e[31m'
-_RESET='\033[0m'
+# Version
+_VERSION="2.0.0"
+
+# Colors
+readonly _GREEN='\033[0;32m'
+readonly _RED='\033[0;31m'
+readonly _YELLOW='\033[0;33m'
+readonly _BLUE='\033[0;34m'
+readonly _RESET='\033[0m'
 
 # List of resources
 # shellcheck disable=SC2034
