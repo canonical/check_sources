@@ -70,6 +70,7 @@ _VERBOSE=false
 _OUTPUT_FORMAT="text"
 _LOG_FILE=""
 _USER_AGENT="check_sources/${_VERSION}"
+_PROXY_URL=""
 
 # Results tracking
 declare -a _RESULTS=()
@@ -297,8 +298,7 @@ _print_summary() {
 _set_proxy() {
     local proxy="$1"
     _validate_proxy "$proxy"
-    export http_proxy="$proxy"
-    export https_proxy="$proxy"
+    _PROXY_URL="$proxy"
     _log "Proxy set to: $proxy"
 }
 
@@ -322,13 +322,24 @@ _check_single_source() {
             sleep 1
         fi
         
-        status_code=$(timeout "$_TIMEOUT" curl \
-            -s -m "$_TIMEOUT" -o /dev/null \
-            -w "%{http_code}" \
-            -I --insecure \
-            -A "$_USER_AGENT" \
-            --connect-timeout 5 \
-            "$url" 2>/dev/null || echo "TIMEOUT")
+        # Build curl command with optional proxy
+        local curl_cmd=(
+            curl
+            -s -m "$_TIMEOUT" -o /dev/null
+            -w "%{http_code}"
+            -I --insecure
+            -A "$_USER_AGENT"
+            --connect-timeout 5
+        )
+        
+        # Add proxy if set
+        if [[ -n "$_PROXY_URL" ]]; then
+            curl_cmd+=(--proxy "$_PROXY_URL")
+        fi
+        
+        curl_cmd+=("$url")
+        
+        status_code=$(timeout "$_TIMEOUT" "${curl_cmd[@]}" 2>/dev/null || echo "TIMEOUT")
         
         if [[ "$status_code" != "TIMEOUT" ]] && [[ "$status_code" =~ ^[0-9]+$ ]]; then
             break
