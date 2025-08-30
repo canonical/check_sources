@@ -62,6 +62,20 @@ readonly _YELLOW='\033[0;33m'
 readonly _BLUE='\033[0;34m'
 readonly _RESET='\033[0m'
 
+# Default settings
+_TIMEOUT=10
+_RETRIES=2
+_PARALLEL=false
+_VERBOSE=false
+_OUTPUT_FORMAT="text"
+_LOG_FILE=""
+_USER_AGENT="check_sources/${_VERSION}"
+
+# Results tracking
+declare -a _RESULTS=()
+declare -i _SUCCESS_COUNT=0
+declare -i _FAILURE_COUNT=0
+
 # List of resources
 # shellcheck disable=SC2034
 _HTTP=(
