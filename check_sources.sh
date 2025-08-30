@@ -403,11 +403,8 @@ _check_protocol() {
 # Help
 ###############################################################################
 
-# _print_help()
-#
-# Print the program help information.
-function _print_help() {
-  cat <<HEREDOC
+_print_help() {
+    cat <<HEREDOC
       _               _
   ___| |__   ___  ___| | __    ___  ___  _   _ _ __ ___ ___  ___
  / __| '_ \\ / _ \\/ __| |/ /   / __|/ _ \\| | | | '__/ __/ _ \\/ __|
@@ -415,16 +412,42 @@ function _print_help() {
  \\___|_| |_|\\___|\\___|_|\\_\\___|___/\\___/ \\__,_|_|  \\___\\___||___/
                          |_____|
 
-Checks access to Canonical package repositories as well any third party
-resources required by (PCB|K8s) infrastructure deployment
+Checks access to Canonical package repositories and third-party resources
+required by infrastructure deployment.
 
-Usage:
-  ${_ME} [proxy URL]
-  ${_ME} -h | --help
+USAGE:
+    $_ME [OPTIONS] [PROXY_URL]
 
-Options:
-  -h --help  Show this screen.
+OPTIONS:
+    -h, --help              Show this help message
+    -v, --version           Show version information
+    -V, --verbose           Enable verbose logging
+    -t, --timeout SECONDS   Set timeout for each check (default: $_TIMEOUT)
+    -r, --retries COUNT     Set number of retries for failed checks (default: $_RETRIES)
+    -p, --parallel          Run checks in parallel (faster but less readable)
+    -f, --format FORMAT     Output format: text, json, csv (default: text)
+    -l, --log FILE          Log detailed output to file
+    -u, --user-agent STRING Set custom User-Agent (default: $_USER_AGENT)
+
+PROXY_URL:
+    HTTP/HTTPS proxy URL in format: http://host:port or https://host:port
+
+EXAMPLES:
+    $_ME                                    # Basic check
+    $_ME --verbose --timeout 15             # Verbose with longer timeout
+    $_ME --parallel --format json           # Parallel execution with JSON output
+    $_ME --log /tmp/check.log http://proxy:8080  # With logging and proxy
+
+EXIT CODES:
+    0    All sources accessible
+    1    Some sources failed or error occurred
+    2    Invalid arguments or missing dependencies
+
 HEREDOC
+}
+
+_print_version() {
+    echo "$_ME version $_VERSION"
 }
 
 ###############################################################################
