@@ -137,13 +137,6 @@ The following enhancements are planned for future versions:
 - **XML Format**: Structured output for enterprise integration and automated processing  
 - **Enhanced JSON**: Pretty-printed JSON with syntax highlighting and extended metadata
 
-### Operational Features
-
-- **Systemd Integration**: Native service files for production deployment and management
-- **Docker Container**: Containerized version for cloud-native and orchestrated deployments
-- **Plugin Architecture**: Extensible framework for custom check types and third-party integrations
-- **Rate Limiting**: Configurable request throttling to respect server limits and policies
-
 ### Performance Optimizations
 
 - **Connection Pooling**: HTTP connection reuse for improved performance and reduced overhead
