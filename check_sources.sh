@@ -588,28 +588,37 @@ function _check_http() {
 # Main
 ###############################################################################
 
-# _main()
-#
-# Description:
-#   Entry point for the program, handling basic option parsing and dispatching.
-function _main() {
-  # Avoid complex option parsing when only one program option is expected.
-  if [[ "${1:-}" =~ ^-h|--help$ ]]; then
-    _print_help
-  else
-    if [[ -n "${1:-}" ]]; then
-      if [[ "${1}" =~ ^https?:\/\/.+:? ]]; then
-        printf "\\nChecking sources against %s proxy.\\n" "${1}"
-        _set_proxy "${1}"
-      else
-        printf "\\nERROR: Invalid proxy URL: %s\\n" "${1}"
-        _print_help
-        exit 1
-      fi
+_main() {
+    # Check dependencies first
+    _check_dependencies
+    
+    # Parse command line options
+    _parse_options "$@"
+    
+    # Initialize log file
+    if [[ -n "$_LOG_FILE" ]]; then
+        _log "Starting check_sources.sh version $_VERSION"
+        _log "Options: timeout=$_TIMEOUT, retries=$_RETRIES, parallel=$_PARALLEL, format=$_OUTPUT_FORMAT"
     fi
-    _check_http "http"
-    _check_http "https"
-  fi
+    
+    # Print CSV header if needed
+    if [[ "$_OUTPUT_FORMAT" == "csv" ]]; then
+        echo "URL,Status,Code,ResponseTime"
+    fi
+    
+    # Run the checks
+    _check_protocol "http"
+    _check_protocol "https"
+    
+    # Print summary
+    _print_summary
+    
+    # Exit with appropriate code
+    if [[ $_FAILURE_COUNT -gt 0 ]]; then
+        exit 1
+    else
+        exit 0
+    fi
 }
 
 # Call main function with all arguments
