@@ -130,6 +130,63 @@ readonly _HTTPS_SOURCES=(
 )
 
 ###############################################################################
+# Utility Functions
+###############################################################################
+
+# Print colored output
+_print_color() {
+    local color="$1"
+    local message="$2"
+    printf "${color}%s${_RESET}\n" "$message"
+}
+
+# Log function
+_log() {
+    local message="$1"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    
+    if [[ -n "$_LOG_FILE" ]]; then
+        echo "[$timestamp] $message" >> "$_LOG_FILE"
+    fi
+    
+    if [[ "$_VERBOSE" == "true" ]]; then
+        _print_color "$_BLUE" "[$timestamp] $message"
+    fi
+}
+
+# Check if command exists
+_command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Validate dependencies
+_check_dependencies() {
+    local missing_deps=()
+    
+    for dep in curl timeout; do
+        if ! _command_exists "$dep"; then
+            missing_deps+=("$dep")
+        fi
+    done
+    
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+        _print_color "$_RED" "ERROR: Missing required dependencies: ${missing_deps[*]}"
+        _print_color "$_YELLOW" "Please install the missing dependencies and try again."
+        exit 1
+    fi
+}
+
+# Validate proxy URL
+_validate_proxy() {
+    local proxy="$1"
+    if [[ ! "$proxy" =~ ^https?://[^/]+:[0-9]+/?$ ]]; then
+        _print_color "$_RED" "ERROR: Invalid proxy URL format: $proxy"
+        _print_color "$_YELLOW" "Expected format: http://host:port or https://host:port"
+        exit 1
+    fi
+}
+
+###############################################################################
 # Help
 ###############################################################################
 
