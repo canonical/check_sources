@@ -150,7 +150,7 @@ _log() {
     fi
     
     if [[ "$_VERBOSE" == "true" ]]; then
-        _print_color "$_BLUE" "[$timestamp] $message"
+        echo "[$timestamp] $message"
     fi
 }
 
@@ -356,8 +356,8 @@ _check_single_source() {
 
 _check_sources_parallel() {
     local protocol="$1"
-    local sources_ref="$2"
-    local -n sources=$sources_ref
+    local sources_var="$2"
+    local -n sources="$sources_var"
     
     local pids=()
     
@@ -374,8 +374,8 @@ _check_sources_parallel() {
 
 _check_sources_sequential() {
     local protocol="$1"
-    local sources_ref="$2"
-    local -n sources=$sources_ref
+    local sources_var="$2"
+    local -n sources="$sources_var"
     
     for source in "${sources[@]}"; do
         _check_single_source "$protocol" "$source"
@@ -387,10 +387,11 @@ _check_protocol() {
     local protocol_upper=$(echo "$protocol" | tr '[:lower:]' '[:upper:]')
     
     if [[ "$_OUTPUT_FORMAT" == "text" ]]; then
-        _print_color "$_BLUE" "\n=== Checking $protocol_upper sources ==="
+        echo
+        _print_color "$_BLUE" "=== Checking $protocol_upper sources ==="
     fi
     
-    local sources_var="_${protocol_upper}_SOURCES[@]"
+    local sources_var="_${protocol_upper}_SOURCES"
     
     if [[ "$_PARALLEL" == "true" ]]; then
         _check_sources_parallel "$protocol" "$sources_var"
