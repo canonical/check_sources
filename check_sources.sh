@@ -76,57 +76,57 @@ declare -a _RESULTS=()
 declare -i _SUCCESS_COUNT=0
 declare -i _FAILURE_COUNT=0
 
-# List of resources
-# shellcheck disable=SC2034
-_HTTP=(
-  ubuntu-cloud.archive.canonical.com
-  nova.cloud.archive.ubuntu.com
-  cloud.archive.ubuntu.com
-  nova.clouds.archive.ubuntu.com
-  clouds.archive.ubuntu.com
-  cloud-images.ubuntu.com
-  keyserver.ubuntu.com
-  archive.ubuntu.com
-  security.ubuntu.com
-  launchpad.net
-  ppa.launchpadcontent.net
-  jujucharms.com
-  streams.canonical.com
-  public.apps.ubuntu.com
-  images.maas.io
-  packages.elastic.co
-  artifacts.elastic.co
-  packages.elasticsearch.org
+# List of HTTP sources
+readonly _HTTP_SOURCES=(
+    ubuntu-cloud.archive.canonical.com
+    nova.cloud.archive.ubuntu.com
+    nova.clouds.archive.ubuntu.com
+    cloud-images.ubuntu.com
+    keyserver.ubuntu.com
+    archive.ubuntu.com
+    security.ubuntu.com
+    usn.ubuntu.com
+    launchpad.net
+    api.launchpad.net
+    ppa.launchpad.net
+    ppa.launchpadcontent.net
+    jujucharms.com
+    jaas.ai
+    charmhub.io
+    api.charmhub.io
+    streams.canonical.com
+    images.maas.io
+    packages.elastic.co
+    artifacts.elastic.co
+    packages.elasticsearch.org
 )
 
-# shellcheck disable=SC2034
-_HTTPS=(
-  cloud-images.ubuntu.com
-  keyserver.ubuntu.com
-  usn.ubuntu.com
-  launchpad.net
-  ppa.launchpadcontent.net
-  jujucharms.com
-  streams.canonical.com
-  snapcraft.io
-  images.maas.io
-  packages.elastic.co
-  artifacts.elastic.co
-  packages.elasticsearch.org
-  entropy.ubuntu.com
-  login.ubuntu.com
-  images.maas.io
-  api.jujucharms.com
-  api.snapcraft.io
-  livepatch.canonical.com
-  dashboard.snapcraft.io
-  image-registry.canonical.com
-  rocks.canonical.com
-  quay.io
-  gcr.io
-  k8s.gcr.io
-  storage.googleapis.com
-  auth.docker.io
+# List of HTTPS sources
+readonly _HTTPS_SOURCES=(
+    cloud-images.ubuntu.com
+    keyserver.ubuntu.com
+    contracts.canonical.com
+    usn.ubuntu.com
+    launchpad.net
+    api.launchpad.net
+    ppa.launchpad.net
+    ppa.launchpadcontent.net
+    jujucharms.com
+    jaas.ai
+    charmhub.io
+    api.charmhub.io
+    entropy.ubuntu.com
+    streams.canonical.com
+    public.apps.ubuntu.com
+    login.ubuntu.com
+    images.maas.io
+    api.snapcraft.io
+    landscape.canonical.com
+    livepatch.canonical.com
+    dashboard.snapcraft.io
+    packages.elastic.co
+    artifacts.elastic.co
+    packages.elasticsearch.org
 )
 
 ###############################################################################
