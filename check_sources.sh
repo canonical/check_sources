@@ -239,6 +239,58 @@ _print_summary() {
 }
 
 ###############################################################################
+# Output Functions
+###############################################################################
+
+_print_status() {
+    local status="$1"
+    local code="$2"
+    local url="$3"
+    local response_time="${4:-N/A}"
+    
+    case "$_OUTPUT_FORMAT" in
+        "json")
+            printf '{"url":"%s","status":"%s","code":"%s","response_time":"%s"}\n' \
+                "$url" "$status" "$code" "$response_time"
+            ;;
+        "csv")
+            printf '"%s","%s","%s","%s"\n' "$url" "$status" "$code" "$response_time"
+            ;;
+        *)
+            if [[ "$status" == "OK" ]]; then
+                printf "%-50s " "$url"
+                _print_color "$_GREEN" "[$code] OK (${response_time}s)"
+            else
+                printf "%-50s " "$url"
+                _print_color "$_RED" "[$code] FAILED"
+            fi
+            ;;
+    esac
+}
+
+_print_summary() {
+    local total=$((_SUCCESS_COUNT + _FAILURE_COUNT))
+    
+    if [[ "$_OUTPUT_FORMAT" == "text" ]]; then
+        echo
+        _print_color "$_BLUE" "=== SUMMARY ==="
+        echo "Total sources checked: $total"
+        _print_color "$_GREEN" "Successful: $_SUCCESS_COUNT"
+        _print_color "$_RED" "Failed: $_FAILURE_COUNT"
+        
+        if [[ $_FAILURE_COUNT -gt 0 ]]; then
+            echo
+            _print_color "$_YELLOW" "Failed sources:"
+            for result in "${_RESULTS[@]}"; do
+                if [[ "$result" == *"FAILED"* ]]; then
+                    echo "  $result"
+                fi
+            done
+        fi
+    fi
+}
+
+###############################################################################
 # Help
 ###############################################################################
 
