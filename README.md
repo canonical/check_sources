@@ -60,10 +60,6 @@ The script validates connectivity to critical services including:
 
 The script uses standard HTTP status codes and curl exit codes to determine connectivity status. Successful responses include 2xx, 3xx, 400, 404, and 405 status codes.
 
-## Contributing
-
-This project is now maintained under the Canonical organization. Please submit issues and pull requests to the new repository location.
-
 ## License
 
 Please refer to the repository for current license information.
