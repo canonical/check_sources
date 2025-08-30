@@ -7,13 +7,13 @@
 #                          |_____|
 #
 # Checks Canonical package repositories and any third party resources required
-# by inrastructure deployment
+# by infrastructure deployment
 #
 # Usage:
-#   check_sources.sh [proxy URL]
+#   check_sources.sh [OPTIONS] [proxy URL]
 #
 # Depends on:
-#  curl
+#  curl, timeout (coreutils)
 #
 
 ###############################################################################
@@ -218,5 +218,5 @@ function _main() {
   fi
 }
 
-# Call `_main` after everything has been defined.
+# Call main function with all arguments
 _main "$@"
