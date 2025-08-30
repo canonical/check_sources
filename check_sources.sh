@@ -451,6 +451,89 @@ _print_version() {
 }
 
 ###############################################################################
+# Option Parsing
+###############################################################################
+
+_parse_options() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                _print_help
+                exit 0
+                ;;
+            -v|--version)
+                _print_version
+                exit 0
+                ;;
+            -V|--verbose)
+                _VERBOSE=true
+                shift
+                ;;
+            -t|--timeout)
+                if [[ -n "${2:-}" ]] && [[ "$2" =~ ^[0-9]+$ ]]; then
+                    _TIMEOUT="$2"
+                    shift 2
+                else
+                    _print_color "$_RED" "ERROR: --timeout requires a numeric argument"
+                    exit 2
+                fi
+                ;;
+            -r|--retries)
+                if [[ -n "${2:-}" ]] && [[ "$2" =~ ^[0-9]+$ ]]; then
+                    _RETRIES="$2"
+                    shift 2
+                else
+                    _print_color "$_RED" "ERROR: --retries requires a numeric argument"
+                    exit 2
+                fi
+                ;;
+            -p|--parallel)
+                _PARALLEL=true
+                shift
+                ;;
+            -f|--format)
+                if [[ -n "${2:-}" ]] && [[ "$2" =~ ^(text|json|csv)$ ]]; then
+                    _OUTPUT_FORMAT="$2"
+                    shift 2
+                else
+                    _print_color "$_RED" "ERROR: --format must be one of: text, json, csv"
+                    exit 2
+                fi
+                ;;
+            -l|--log)
+                if [[ -n "${2:-}" ]]; then
+                    _LOG_FILE="$2"
+                    # Create log file directory if it doesn't exist
+                    mkdir -p "$(dirname "$_LOG_FILE")"
+                    shift 2
+                else
+                    _print_color "$_RED" "ERROR: --log requires a file path argument"
+                    exit 2
+                fi
+                ;;
+            -u|--user-agent)
+                if [[ -n "${2:-}" ]]; then
+                    _USER_AGENT="$2"
+                    shift 2
+                else
+                    _print_color "$_RED" "ERROR: --user-agent requires a string argument"
+                    exit 2
+                fi
+                ;;
+            http://*|https://*)
+                _set_proxy "$1"
+                shift
+                ;;
+            *)
+                _print_color "$_RED" "ERROR: Unknown option: $1"
+                _print_help
+                exit 2
+                ;;
+        esac
+    done
+}
+
+###############################################################################
 # Program Functions
 ###############################################################################
 
