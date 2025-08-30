@@ -187,7 +187,6 @@ function _check_http() {
       _ok "${_RET}"
     else
       _err "${_RET}"
-    fi
   done
 }
 
