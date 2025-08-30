@@ -291,6 +291,115 @@ _print_summary() {
 }
 
 ###############################################################################
+# Core Functions
+###############################################################################
+
+_set_proxy() {
+    local proxy="$1"
+    _validate_proxy "$proxy"
+    export http_proxy="$proxy"
+    export https_proxy="$proxy"
+    _log "Proxy set to: $proxy"
+}
+
+_check_single_source() {
+    local protocol="$1"
+    local source="$2"
+    local url="${protocol}://${source}"
+    
+    _log "Checking: $url"
+    
+    # Measure response time
+    local start_time=$(date +%s.%N)
+    
+    # Perform the check with retries
+    local attempt=1
+    local status_code=""
+    
+    while [[ $attempt -le $_RETRIES ]]; do
+        if [[ $attempt -gt 1 ]]; then
+            _log "Retry attempt $attempt for $url"
+            sleep 1
+        fi
+        
+        status_code=$(timeout "$_TIMEOUT" curl \
+            -s -m "$_TIMEOUT" -o /dev/null \
+            -w "%{http_code}" \
+            -I --insecure \
+            -A "$_USER_AGENT" \
+            --connect-timeout 5 \
+            "$url" 2>/dev/null || echo "TIMEOUT")
+        
+        if [[ "$status_code" != "TIMEOUT" ]] && [[ "$status_code" =~ ^[0-9]+$ ]]; then
+            break
+        fi
+        
+        ((attempt++))
+    done
+    
+    local end_time=$(date +%s.%N)
+    local response_time=$(echo "$end_time - $start_time" | bc -l 2>/dev/null || echo "N/A")
+    
+    # Determine if successful
+    if [[ "$status_code" =~ ^(2[0-9][0-9]|3[0-9][0-9]|400|404|405)$ ]]; then
+        _print_status "OK" "$status_code" "$url" "$response_time"
+        _RESULTS+=("$url: OK [$status_code]")
+        ((_SUCCESS_COUNT++))
+        return 0
+    else
+        _print_status "FAILED" "$status_code" "$url" "$response_time"
+        _RESULTS+=("$url: FAILED [$status_code]")
+        ((_FAILURE_COUNT++))
+        return 1
+    fi
+}
+
+_check_sources_parallel() {
+    local protocol="$1"
+    local sources_ref="$2"
+    local -n sources=$sources_ref
+    
+    local pids=()
+    
+    for source in "${sources[@]}"; do
+        _check_single_source "$protocol" "$source" &
+        pids+=($!)
+    done
+    
+    # Wait for all background processes
+    for pid in "${pids[@]}"; do
+        wait "$pid"
+    done
+}
+
+_check_sources_sequential() {
+    local protocol="$1"
+    local sources_ref="$2"
+    local -n sources=$sources_ref
+    
+    for source in "${sources[@]}"; do
+        _check_single_source "$protocol" "$source"
+    done
+}
+
+_check_protocol() {
+    local protocol="$1"
+    local protocol_upper=$(echo "$protocol" | tr '[:lower:]' '[:upper:]')
+    
+    if [[ "$_OUTPUT_FORMAT" == "text" ]]; then
+        _print_color "$_BLUE" "\n=== Checking $protocol_upper sources ==="
+    fi
+    
+    local sources_var="_${protocol_upper}_SOURCES[@]"
+    
+    if [[ "$_PARALLEL" == "true" ]]; then
+        _check_sources_parallel "$protocol" "$sources_var"
+    else
+        _check_sources_sequential "$protocol" "$sources_var"
+    fi
+}
+
+###############################################################################
 # Help
 ###############################################################################
 
