@@ -27,7 +27,7 @@ The `check_sources` script is a comprehensive Bash utility that validates connec
 - **Ubuntu Infrastructure**: Package management, security updates, cloud images, keyserver
 - **Canonical Services**: Snap packages, Juju charms, MAAS images, Landscape, Livepatch
 - **Development Platforms**: Charmhub, JAAS, API endpoints, dashboard services  
-- **Third-party Dependencies**: Elasticsearch packages and artifacts
+- **Third-party Dependencies**: TODO
 
 ## Usage
 
