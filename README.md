@@ -100,10 +100,6 @@ The script validates connectivity to critical services including:
 - landscape.canonical.com
 - livepatch.canonical.com
 
-**Third-party Dependencies:**
-
-- packages.elastic.co
-- artifacts.elastic.co
 
 ## Exit Codes
 
