@@ -128,6 +128,7 @@ readonly _HTTPS_SOURCES=(
     packages.elastic.co
     artifacts.elastic.co
     packages.elasticsearch.org
+    registry.jujucharms.com
 )
 
 ###############################################################################
