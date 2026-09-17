@@ -62,7 +62,7 @@ The `check_sources` script is a comprehensive Bash utility that validates connec
 
 ### Command-Line Options
 
-```
+```text
 -h, --help              Show help message and usage examples
 -v, --version           Display version information  
 -V, --verbose           Enable verbose logging with timestamps
@@ -100,7 +100,6 @@ The script validates connectivity to critical services including:
 - landscape.canonical.com
 - livepatch.canonical.com
 
-
 ## Exit Codes
 
 - **0**: All sources accessible, no failures detected
@@ -108,6 +107,26 @@ The script validates connectivity to critical services including:
 - **2**: Invalid command-line arguments or missing required dependencies
 
 The script considers 2xx, 3xx, 400, 404, and 405 HTTP status codes as successful connectivity indicators.
+
+## Failure Labels
+
+When a source returns no HTTP response at all, the code column shows a short label derived from the curl exit status instead of an HTTP code. The same label appears in the text, JSON, and CSV output and in the failed sources list of the summary.
+
+| Label     | Meaning                                                   | curl exit code            |
+|-----------|-----------------------------------------------------------|---------------------------|
+| `TIMEOUT` | No response within the configured timeout                 | 28, or 124 from `timeout` |
+| `DNS`     | Hostname could not be resolved                            | 6                         |
+| `REFUSED` | Connection refused or could not be established            | 7                         |
+| `TLS`     | TLS handshake or certificate error                        | 35, 60                    |
+| `ERR<n>`  | Any other curl failure, where `<n>` is the curl exit code | other                     |
+
+Example:
+
+```text
+http://nonexistent.invalid.example                 [DNS] FAILED
+http://127.0.0.1:1                                 [REFUSED] FAILED
+http://10.255.255.1                                [TIMEOUT] FAILED
+```
 
 ## Future Improvements
 

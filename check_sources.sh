@@ -460,6 +460,14 @@ EXIT CODES:
     1    Some sources failed or error occurred
     2    Invalid arguments or missing dependencies
 
+FAILURE LABELS:
+    Shown in the code column when no HTTP response arrived:
+    TIMEOUT  No response within the timeout
+    DNS      Hostname could not be resolved
+    REFUSED  Connection refused or could not be established
+    TLS      TLS handshake or certificate error
+    ERR<n>   Any other curl failure, <n> is the curl exit code
+
 HEREDOC
 }
 
