@@ -149,7 +149,8 @@ _print_color() {
 # Log function
 _log() {
   local message="$1"
-  local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+  local timestamp
+  timestamp=$(date '+%Y-%m-%d %H:%M:%S')
 
   if [[ -n "$_LOG_FILE" ]]; then
     echo "[$timestamp] $message" >>"$_LOG_FILE"
@@ -295,7 +296,8 @@ _check_single_source() {
   _log "Checking: $url"
 
   # Measure response time
-  local start_time=$(date +%s.%N)
+  local start_time
+  start_time=$(date +%s.%N)
 
   # Perform the check with retries
   local attempt=1
@@ -338,8 +340,9 @@ _check_single_source() {
     ((attempt++))
   done
 
-  local end_time=$(date +%s.%N)
-  local response_time=$(echo "$end_time - $start_time" | bc -l 2>/dev/null || echo "N/A")
+  local end_time response_time
+  end_time=$(date +%s.%N)
+  response_time=$(echo "$end_time - $start_time" | bc -l 2>/dev/null || echo "N/A")
 
   # Determine if successful
   if [[ "$status_code" =~ ^(2[0-9][0-9]|3[0-9][0-9]|400|404|405)$ ]]; then
@@ -400,7 +403,8 @@ _check_sources_sequential() {
 
 _check_protocol() {
   local protocol="$1"
-  local protocol_upper=$(echo "$protocol" | tr '[:lower:]' '[:upper:]')
+  local protocol_upper
+  protocol_upper=$(echo "$protocol" | tr '[:lower:]' '[:upper:]')
 
   if [[ "$_OUTPUT_FORMAT" == "text" ]]; then
     echo
