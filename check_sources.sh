@@ -76,6 +76,10 @@ _PROXY_URL=""
 declare -a _RESULTS=()
 declare -i _SUCCESS_COUNT=0
 declare -i _FAILURE_COUNT=0
+# When set, _record_result appends to this file instead of updating the
+# globals above. Used by parallel mode, where checks run in subshells that
+# cannot modify the parent's variables.
+_RESULT_FILE=""
 
 # List of HTTP sources
 readonly _HTTP_SOURCES=(
@@ -241,58 +245,6 @@ _print_summary() {
 }
 
 ###############################################################################
-# Output Functions
-###############################################################################
-
-_print_status() {
-    local status="$1"
-    local code="$2"
-    local url="$3"
-    local response_time="${4:-N/A}"
-    
-    case "$_OUTPUT_FORMAT" in
-        "json")
-            printf '{"url":"%s","status":"%s","code":"%s","response_time":"%s"}\n' \
-                "$url" "$status" "$code" "$response_time"
-            ;;
-        "csv")
-            printf '"%s","%s","%s","%s"\n' "$url" "$status" "$code" "$response_time"
-            ;;
-        *)
-            if [[ "$status" == "OK" ]]; then
-                printf "%-50s " "$url"
-                _print_color "$_GREEN" "[$code] OK (${response_time}s)"
-            else
-                printf "%-50s " "$url"
-                _print_color "$_RED" "[$code] FAILED"
-            fi
-            ;;
-    esac
-}
-
-_print_summary() {
-    local total=$((_SUCCESS_COUNT + _FAILURE_COUNT))
-    
-    if [[ "$_OUTPUT_FORMAT" == "text" ]]; then
-        echo
-        _print_color "$_BLUE" "=== SUMMARY ==="
-        echo "Total sources checked: $total"
-        _print_color "$_GREEN" "Successful: $_SUCCESS_COUNT"
-        _print_color "$_RED" "Failed: $_FAILURE_COUNT"
-        
-        if [[ $_FAILURE_COUNT -gt 0 ]]; then
-            echo
-            _print_color "$_YELLOW" "Failed sources:"
-            for result in "${_RESULTS[@]}"; do
-                if [[ "$result" == *"FAILED"* ]]; then
-                    echo "  $result"
-                fi
-            done
-        fi
-    fi
-}
-
-###############################################################################
 # Core Functions
 ###############################################################################
 
@@ -301,6 +253,26 @@ _set_proxy() {
     _validate_proxy "$proxy"
     _PROXY_URL="$proxy"
     _log "Proxy set to: $proxy"
+}
+
+# Record one check outcome. Writes to _RESULT_FILE when running as a
+# background job, otherwise updates the in-process counters directly.
+_record_result() {
+    local status="$1"
+    local url="$2"
+    local code="$3"
+
+    if [[ -n "$_RESULT_FILE" ]]; then
+        printf '%s\t%s\t%s\n' "$status" "$url" "$code" >> "$_RESULT_FILE"
+        return 0
+    fi
+
+    _RESULTS+=("$url: $status [$code]")
+    if [[ "$status" == "OK" ]]; then
+        _SUCCESS_COUNT=$((_SUCCESS_COUNT + 1))
+    else
+        _FAILURE_COUNT=$((_FAILURE_COUNT + 1))
+    fi
 }
 
 _check_single_source() {
@@ -355,13 +327,11 @@ _check_single_source() {
     # Determine if successful
     if [[ "$status_code" =~ ^(2[0-9][0-9]|3[0-9][0-9]|400|404|405)$ ]]; then
         _print_status "OK" "$status_code" "$url" "$response_time"
-        _RESULTS+=("$url: OK [$status_code]")
-        _SUCCESS_COUNT=$((_SUCCESS_COUNT + 1))
+        _record_result "OK" "$url" "$status_code"
         return 0
     else
         _print_status "FAILED" "$status_code" "$url" "$response_time"
-        _RESULTS+=("$url: FAILED [$status_code]")
-        _FAILURE_COUNT=$((_FAILURE_COUNT + 1))
+        _record_result "FAILED" "$url" "$status_code"
         return 1
     fi
 }
@@ -370,18 +340,34 @@ _check_sources_parallel() {
     local protocol="$1"
     local sources_var="$2"
     local -n sources="$sources_var"
-    
+
     local pids=()
-    
+
+    # Background jobs run in subshells and cannot update the parent's
+    # counters, so each one appends to a shared file that is read back
+    # once every job has finished.
+    _RESULT_FILE=$(mktemp)
+
     for source in "${sources[@]}"; do
         _check_single_source "$protocol" "$source" &
         pids+=($!)
     done
-    
-    # Wait for all background processes
+
+    # Wait for all background processes. A failed check returns 1, which
+    # must not abort the script under errexit.
     for pid in "${pids[@]}"; do
-        wait "$pid"
+        wait "$pid" || true
     done
+
+    local result_file="$_RESULT_FILE"
+    _RESULT_FILE=""
+
+    local status url code
+    while IFS=$'\t' read -r status url code; do
+        _record_result "$status" "$url" "$code"
+    done < "$result_file"
+
+    rm -f "$result_file"
 }
 
 _check_sources_sequential() {
@@ -390,7 +376,8 @@ _check_sources_sequential() {
     local -n sources="$sources_var"
     
     for source in "${sources[@]}"; do
-        _check_single_source "$protocol" "$source"
+        # A failed check returns 1; do not let errexit abort the run.
+        _check_single_source "$protocol" "$source" || true
     done
 }
 
