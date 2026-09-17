@@ -79,7 +79,7 @@ The `check_sources` script is a comprehensive Bash utility that validates connec
 - `curl` - for HTTP/HTTPS connectivity testing
 - `timeout` (coreutils) - for request timeout management  
 - `bc` - for response time calculations (optional, falls back to "N/A")
-- Bash 4.0+ shell environment with nameref support
+- Bash 4.0+ shell environment
 
 ## Tested Services
 

@@ -81,58 +81,61 @@ declare -i _FAILURE_COUNT=0
 # cannot modify the parent's variables.
 _RESULT_FILE=""
 
-# List of HTTP sources
-readonly _HTTP_SOURCES=(
-  ubuntu-cloud.archive.canonical.com
-  nova.cloud.archive.ubuntu.com
-  nova.clouds.archive.ubuntu.com
-  cloud-images.ubuntu.com
-  keyserver.ubuntu.com
-  archive.ubuntu.com
-  security.ubuntu.com
-  usn.ubuntu.com
-  launchpad.net
-  api.launchpad.net
-  ppa.launchpad.net
-  ppa.launchpadcontent.net
-  jujucharms.com
-  jaas.ai
-  charmhub.io
-  api.charmhub.io
-  streams.canonical.com
-  images.maas.io
-  packages.elastic.co
-  artifacts.elastic.co
-  packages.elasticsearch.org
-)
-
-# List of HTTPS sources
-readonly _HTTPS_SOURCES=(
-  cloud-images.ubuntu.com
-  keyserver.ubuntu.com
-  contracts.canonical.com
-  usn.ubuntu.com
-  launchpad.net
-  api.launchpad.net
-  ppa.launchpad.net
-  ppa.launchpadcontent.net
-  jujucharms.com
-  jaas.ai
-  charmhub.io
-  api.charmhub.io
-  entropy.ubuntu.com
-  streams.canonical.com
-  public.apps.ubuntu.com
-  login.ubuntu.com
-  images.maas.io
-  api.snapcraft.io
-  landscape.canonical.com
-  livepatch.canonical.com
-  dashboard.snapcraft.io
-  packages.elastic.co
-  artifacts.elastic.co
-  packages.elasticsearch.org
-  registry.jujucharms.com
+# Sources to check, one URL per line. A host that must be reachable over
+# both protocols is listed twice, side by side. The protocol sections in the
+# report are derived from the URL scheme, in the order listed here.
+readonly _SOURCES=(
+  # Ubuntu archives and cloud images
+  http://ubuntu-cloud.archive.canonical.com
+  http://nova.cloud.archive.ubuntu.com
+  http://nova.clouds.archive.ubuntu.com
+  http://cloud-images.ubuntu.com
+  https://cloud-images.ubuntu.com
+  http://keyserver.ubuntu.com
+  https://keyserver.ubuntu.com
+  https://contracts.canonical.com
+  http://archive.ubuntu.com
+  http://security.ubuntu.com
+  http://usn.ubuntu.com
+  https://usn.ubuntu.com
+  # Launchpad
+  http://launchpad.net
+  https://launchpad.net
+  http://api.launchpad.net
+  https://api.launchpad.net
+  http://ppa.launchpad.net
+  https://ppa.launchpad.net
+  http://ppa.launchpadcontent.net
+  https://ppa.launchpadcontent.net
+  # Juju and Charmhub
+  http://jujucharms.com
+  https://jujucharms.com
+  http://jaas.ai
+  https://jaas.ai
+  http://charmhub.io
+  https://charmhub.io
+  http://api.charmhub.io
+  https://api.charmhub.io
+  # Canonical services
+  https://entropy.ubuntu.com
+  http://streams.canonical.com
+  https://streams.canonical.com
+  https://public.apps.ubuntu.com
+  https://login.ubuntu.com
+  http://images.maas.io
+  https://images.maas.io
+  https://api.snapcraft.io
+  https://landscape.canonical.com
+  https://livepatch.canonical.com
+  https://dashboard.snapcraft.io
+  # Third party
+  http://packages.elastic.co
+  https://packages.elastic.co
+  http://artifacts.elastic.co
+  https://artifacts.elastic.co
+  http://packages.elasticsearch.org
+  https://packages.elasticsearch.org
+  https://registry.jujucharms.com
 )
 
 ###############################################################################
@@ -289,9 +292,7 @@ _curl_error_label() {
 }
 
 _check_single_source() {
-  local protocol="$1"
-  local source="$2"
-  local url="${protocol}://${source}"
+  local url="$1"
 
   _log "Checking: $url"
 
@@ -357,9 +358,7 @@ _check_single_source() {
 }
 
 _check_sources_parallel() {
-  local protocol="$1"
-  local sources_var="$2"
-  local -n sources="$sources_var"
+  local urls=("$@")
 
   local pids=()
 
@@ -368,8 +367,8 @@ _check_sources_parallel() {
   # once every job has finished.
   _RESULT_FILE=$(mktemp)
 
-  for source in "${sources[@]}"; do
-    _check_single_source "$protocol" "$source" &
+  for url in "${urls[@]}"; do
+    _check_single_source "$url" &
     pids+=($!)
   done
 
@@ -391,13 +390,11 @@ _check_sources_parallel() {
 }
 
 _check_sources_sequential() {
-  local protocol="$1"
-  local sources_var="$2"
-  local -n sources="$sources_var"
+  local urls=("$@")
 
-  for source in "${sources[@]}"; do
+  for url in "${urls[@]}"; do
     # A failed check returns 1; do not let errexit abort the run.
-    _check_single_source "$protocol" "$source" || true
+    _check_single_source "$url" || true
   done
 }
 
@@ -411,12 +408,24 @@ _check_protocol() {
     _print_color "$_BLUE" "=== Checking $protocol_upper sources ==="
   fi
 
-  local sources_var="_${protocol_upper}_SOURCES"
+  # Select the sources whose scheme matches this protocol, keeping their
+  # order in _SOURCES.
+  local urls=()
+  local url
+  for url in "${_SOURCES[@]}"; do
+    if [[ "$url" == "${protocol}://"* ]]; then
+      urls+=("$url")
+    fi
+  done
+
+  if [[ ${#urls[@]} -eq 0 ]]; then
+    return 0
+  fi
 
   if [[ "$_PARALLEL" == "true" ]]; then
-    _check_sources_parallel "$protocol" "$sources_var"
+    _check_sources_parallel "${urls[@]}"
   else
-    _check_sources_sequential "$protocol" "$sources_var"
+    _check_sources_sequential "${urls[@]}"
   fi
 }
 
