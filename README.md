@@ -2,7 +2,7 @@
 
 ## About
 
-The `check_sources` script is a comprehensive Bash utility that validates connectivity to Canonical package repositories and third-party resources required for infrastructure deployment. Version 2.0.0 introduces advanced features including configurable options, multiple output formats, parallel execution, and enhanced error handling. It's particularly useful for environments where internet access may be restricted or proxied.
+The `check_sources` script is a comprehensive Bash utility that validates connectivity to Canonical package repositories and third-party resources required for infrastructure deployment. Version 2.0.0 introduced configurable options, multiple output formats, parallel execution, and enhanced error handling. Version 2.1.0 adds custom sources, URL filtering, descriptive failure labels, and color-aware output. It's particularly useful for environments where internet access may be restricted or proxied.
 
 ## Features
 
@@ -22,19 +22,27 @@ The `check_sources` script is a comprehensive Bash utility that validates connec
 - **Enhanced Error Handling**: Comprehensive dependency checking and validation
 - **Comprehensive Help**: Built-in documentation with usage examples
 
+### What's New (v2.1.0)
+
+- **Custom Sources**: Add your own URLs with `--source` or a `--sources-file`
+- **Source Filtering**: `--include` and `--exclude` regular expressions to test a subset of sources
+- **Failure Labels**: Unreachable sources report `TIMEOUT`, `DNS`, `REFUSED`, `TLS` or `ERR<n>` instead of a bare `000`
+- **Color Aware Output**: Colors are disabled automatically when piped, when `NO_COLOR` is set, or with `--no-color`
+- **Reliable Parallel Mode**: Summary counts and exit code are correct with `--parallel`, and a failed source no longer aborts the run
+
 ### Validated Services
 
-- **Ubuntu Infrastructure**: Package management, security updates, cloud images, keyserver
+- **Ubuntu Infrastructure**: Package management, security updates, cloud images, keyserver, Ubuntu Pro contracts
 - **Canonical Services**: Snap packages, Juju charms, MAAS images, Landscape, Livepatch
-- **Development Platforms**: Charmhub, JAAS, API endpoints, dashboard services  
-- **Third-party Dependencies**: TODO
+- **Development Platforms**: Launchpad, Charmhub, JAAS, API endpoints, dashboard services
+- **Third-party Dependencies**: Elastic package and artifact repositories
 
 ## Usage
 
 ### Basic Usage
 
 ```bash
-# Basic connectivity check (backward compatible)
+# Basic connectivity check
 ./check_sources.sh
 
 # Display help and all available options
@@ -60,6 +68,45 @@ The `check_sources` script is a comprehensive Bash utility that validates connec
 ./check_sources.sh --retries 3 --user-agent "MyOrg-ConnChecker/1.0"
 ```
 
+### Custom Sources
+
+Extra sources are checked in addition to the built-in list. Each one must be a full `http://` or `https://` URL.
+
+```bash
+# Add sources on the command line
+./check_sources.sh --source https://mirror.example.com --source http://apt.example.com
+
+# Add sources from a file
+./check_sources.sh --sources-file my-sources.txt
+```
+
+A sources file holds one URL per line. Blank lines and anything after a `#` are ignored:
+
+```text
+# Internal mirrors
+https://mirror.example.com
+http://apt.example.com      # legacy apt mirror
+```
+
+### Filtering Sources
+
+`--include` and `--exclude` take extended regular expressions matched against the full URL and can be repeated. A source is checked when it matches at least one include pattern, or when no include pattern was given, and matches no exclude pattern. The filters apply to built-in and custom sources alike.
+
+```bash
+# Only the Elastic sources
+./check_sources.sh --include elastic
+
+# Everything except plain HTTP
+./check_sources.sh --exclude '^http:'
+
+# Only https Launchpad and Charmhub endpoints
+./check_sources.sh --include launchpad --include charmhub --exclude '^http:'
+```
+
+### Colors
+
+Colored output is used only when standard output is a terminal. It is turned off automatically when the output is piped or redirected, when the [`NO_COLOR`](https://no-color.org/) environment variable is set, or when `--no-color` is given.
+
 ### Command-Line Options
 
 ```text
@@ -72,39 +119,76 @@ The `check_sources` script is a comprehensive Bash utility that validates connec
 -f, --format FORMAT     Output format: text, json, csv (default: text)  
 -l, --log FILE          Log detailed output to specified file
 -u, --user-agent STRING Set custom User-Agent header
+-s, --source URL        Add a source to check (repeatable)
+-S, --sources-file FILE Add sources from a file, one URL per line
+-i, --include PATTERN   Only check sources whose URL matches the pattern (repeatable)
+-x, --exclude PATTERN   Skip sources whose URL matches the pattern (repeatable)
+    --no-color          Disable colored output
 ```
 
 ## Dependencies
 
 - `curl` - for HTTP/HTTPS connectivity testing
-- `timeout` (coreutils) - for request timeout management  
+- `timeout` and `mktemp` (coreutils) - for request timeout management and parallel mode
 - `bc` - for response time calculations (optional, falls back to "N/A")
 - Bash 4.0+ shell environment
 
 ## Tested Services
 
-The script validates connectivity to critical services including:
+The built-in list has 46 URLs across 31 hosts. Hosts are grouped as in the script; most are checked over both HTTP and HTTPS.
 
-**Ubuntu Infrastructure:**
+**Ubuntu archives and cloud images:**
 
 - archive.ubuntu.com
 - security.ubuntu.com
+- usn.ubuntu.com
+- ubuntu-cloud.archive.canonical.com
+- nova.cloud.archive.ubuntu.com
+- nova.clouds.archive.ubuntu.com
 - cloud-images.ubuntu.com
 - keyserver.ubuntu.com
+- contracts.canonical.com
 
-**Canonical Services:**
+**Launchpad:**
+
+- launchpad.net
+- api.launchpad.net
+- ppa.launchpad.net
+- ppa.launchpadcontent.net
+
+**Juju and Charmhub:**
 
 - charmhub.io
-- snapcraft.io
-- launchpad.net
+- api.charmhub.io
+- jujucharms.com
+- registry.jujucharms.com
+- jaas.ai
+
+**Canonical services:**
+
+- api.snapcraft.io
+- dashboard.snapcraft.io
+- login.ubuntu.com
+- public.apps.ubuntu.com
+- entropy.ubuntu.com
+- streams.canonical.com
+- images.maas.io
 - landscape.canonical.com
 - livepatch.canonical.com
+
+**Third party:**
+
+- packages.elastic.co
+- artifacts.elastic.co
+- packages.elasticsearch.org
+
+Run `./check_sources.sh --format csv` to get the exact list of URLs checked, including the protocol of each one.
 
 ## Exit Codes
 
 - **0**: All sources accessible, no failures detected
 - **1**: Some sources failed connectivity tests or errors occurred during execution  
-- **2**: Invalid command-line arguments or missing required dependencies
+- **2**: Invalid command-line arguments, unreadable sources file, invalid pattern, no sources left after filtering, or missing required dependencies
 
 The script considers 2xx, 3xx, 400, 404, and 405 HTTP status codes as successful connectivity indicators.
 
@@ -132,31 +216,10 @@ http://10.255.255.1                                [TIMEOUT] FAILED
 
 The following enhancements are planned for future versions:
 
-### Configuration & Usability
-
-- **Configuration Files**: Support for `~/.check_sources.conf` and `/etc/check_sources.conf` to persist user preferences
-- **Custom Source Lists**: Allow users to define additional URLs via configuration files or command-line options
-- **Interactive Mode**: Guided setup with prompts for timeout, retries, output format, and other preferences
-- **Progress Indicators**: Real-time progress bars and status updates for long-running checks
-
-### Advanced Connectivity Features  
-
-- **Source Filtering**: `--include` and `--exclude` patterns to test specific subsets of sources
-- **IPv6 Support**: Dual-stack connectivity testing for both IPv4 and IPv6
-- **Health Scoring**: Weighted scoring system to calculate overall infrastructure health metrics
-- **Circuit Breaker**: Intelligent skipping of consistently failing sources to improve performance
-
-### Enhanced Output Formats
-
-- **HTML Reports**: Rich web-based output with interactive charts and detailed analysis
-- **XML Format**: Structured output for enterprise integration and automated processing  
-- **Enhanced JSON**: Pretty-printed JSON with syntax highlighting and extended metadata
-
-### Performance Optimizations
-
-- **Connection Pooling**: HTTP connection reuse for improved performance and reduced overhead
-- **Adaptive Timeouts**: Dynamic timeout adjustment based on historical response patterns  
-- **Intelligent Scheduling**: Smart retry strategies and failure prediction algorithms
+- **IPv6 Support**: `-4` and `-6` options to force IPv4 or IPv6 for dual-stack deployments
+- **Enhanced JSON**: A single JSON document with a summary object and the list of results, instead of one object per line
+- **Progress Indicator**: A `[n/total]` counter in sequential text mode
+- **Exit Code Alignment**: Missing dependencies and invalid proxy URLs currently exit with 1 instead of the documented 2
 
 ---
 

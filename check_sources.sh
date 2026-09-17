@@ -53,14 +53,15 @@ IFS=$'\n\t'
 _ME=$(basename "${0}")
 
 # Version
-_VERSION="2.0.0"
+_VERSION="2.1.0"
 
-# Colors
-readonly _GREEN='\033[0;32m'
-readonly _RED='\033[0;31m'
-readonly _YELLOW='\033[0;33m'
-readonly _BLUE='\033[0;34m'
-readonly _RESET='\033[0m'
+# Colors. Cleared by _disable_colors when the output is not a terminal, when
+# the NO_COLOR environment variable is set, or when --no-color is given.
+_GREEN='\033[0;32m'
+_RED='\033[0;31m'
+_YELLOW='\033[0;33m'
+_BLUE='\033[0;34m'
+_RESET='\033[0m'
 
 # Default settings
 _TIMEOUT=10
@@ -71,6 +72,15 @@ _OUTPUT_FORMAT="text"
 _LOG_FILE=""
 _USER_AGENT="check_sources/${_VERSION}"
 _PROXY_URL=""
+
+# Extra sources given with --source or --sources-file, appended to _SOURCES
+declare -a _EXTRA_SOURCES=()
+# Regular expressions given with --include and --exclude, matched against
+# the full URL
+declare -a _INCLUDE_PATTERNS=()
+declare -a _EXCLUDE_PATTERNS=()
+# Final list of URLs to check, built by _select_sources
+declare -a _URLS=()
 
 # Results tracking
 declare -a _RESULTS=()
@@ -164,6 +174,23 @@ _log() {
   fi
 }
 
+# Turn off colored output
+_disable_colors() {
+  _GREEN=""
+  _RED=""
+  _YELLOW=""
+  _BLUE=""
+  _RESET=""
+}
+
+# Disable colors when they would end up in a pipe or a file, or when the
+# user asked for plain output through the NO_COLOR convention.
+_setup_colors() {
+  if [[ -n "${NO_COLOR:-}" ]] || [[ ! -t 1 ]]; then
+    _disable_colors
+  fi
+}
+
 # Check if command exists
 _command_exists() {
   command -v "$1" >/dev/null 2>&1
@@ -247,6 +274,104 @@ _print_summary() {
       done
     fi
   fi
+}
+
+###############################################################################
+# Source Selection
+###############################################################################
+
+# Validate and add one user supplied source URL
+_add_source() {
+  local url="$1"
+  local origin="$2"
+
+  if [[ ! "$url" =~ ^https?://[^[:space:]]+$ ]]; then
+    _print_color "$_RED" "ERROR: Invalid source URL in $origin: $url"
+    _print_color "$_YELLOW" "Expected format: http://host or https://host"
+    exit 2
+  fi
+
+  _EXTRA_SOURCES+=("$url")
+}
+
+# Read sources from a file: one URL per line, blank lines and everything
+# after a '#' are ignored.
+_load_sources_file() {
+  local file="$1"
+  local origin="file $1"
+  local line
+
+  if [[ ! -r "$file" ]]; then
+    _print_color "$_RED" "ERROR: Cannot read sources file: $file"
+    exit 2
+  fi
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    # Strip comments and surrounding whitespace
+    line="${line%%#*}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+
+    if [[ -n "$line" ]]; then
+      _add_source "$line" "$origin"
+    fi
+  done <"$file"
+}
+
+# Validate a regular expression given to --include or --exclude
+_validate_pattern() {
+  local pattern="$1"
+  local option="$2"
+  local rc=0
+
+  # [[ =~ ]] returns 2 when the expression itself is invalid. The group
+  # keeps errexit from aborting on the expected non-match.
+  { [[ "" =~ $pattern ]] 2>/dev/null; rc=$?; } || true
+  if [[ $rc -eq 2 ]]; then
+    _print_color "$_RED" "ERROR: $option requires a valid regular expression: $pattern"
+    exit 2
+  fi
+}
+
+# Build _URLS from the built-in and extra sources, applying the include and
+# exclude patterns. A URL is kept when it matches at least one include
+# pattern (or none were given) and matches no exclude pattern.
+_select_sources() {
+  local url pattern keep
+
+  for url in "${_SOURCES[@]}" ${_EXTRA_SOURCES[@]+"${_EXTRA_SOURCES[@]}"}; do
+    keep=true
+
+    if [[ ${#_INCLUDE_PATTERNS[@]} -gt 0 ]]; then
+      keep=false
+      for pattern in "${_INCLUDE_PATTERNS[@]}"; do
+        if [[ "$url" =~ $pattern ]]; then
+          keep=true
+          break
+        fi
+      done
+    fi
+
+    if [[ "$keep" == "true" ]]; then
+      for pattern in ${_EXCLUDE_PATTERNS[@]+"${_EXCLUDE_PATTERNS[@]}"}; do
+        if [[ "$url" =~ $pattern ]]; then
+          keep=false
+          break
+        fi
+      done
+    fi
+
+    if [[ "$keep" == "true" ]]; then
+      _URLS+=("$url")
+    fi
+  done
+
+  if [[ ${#_URLS[@]} -eq 0 ]]; then
+    _print_color "$_RED" "ERROR: No sources left to check after applying --include/--exclude"
+    exit 2
+  fi
+
+  _log "Selected ${#_URLS[@]} sources to check"
 }
 
 ###############################################################################
@@ -403,16 +528,11 @@ _check_protocol() {
   local protocol_upper
   protocol_upper=$(echo "$protocol" | tr '[:lower:]' '[:upper:]')
 
-  if [[ "$_OUTPUT_FORMAT" == "text" ]]; then
-    echo
-    _print_color "$_BLUE" "=== Checking $protocol_upper sources ==="
-  fi
-
   # Select the sources whose scheme matches this protocol, keeping their
-  # order in _SOURCES.
+  # order in _URLS.
   local urls=()
   local url
-  for url in "${_SOURCES[@]}"; do
+  for url in "${_URLS[@]}"; do
     if [[ "$url" == "${protocol}://"* ]]; then
       urls+=("$url")
     fi
@@ -420,6 +540,11 @@ _check_protocol() {
 
   if [[ ${#urls[@]} -eq 0 ]]; then
     return 0
+  fi
+
+  if [[ "$_OUTPUT_FORMAT" == "text" ]]; then
+    echo
+    _print_color "$_BLUE" "=== Checking $protocol_upper sources ==="
   fi
 
   if [[ "$_PARALLEL" == "true" ]]; then
@@ -432,6 +557,14 @@ _check_protocol() {
 ###############################################################################
 # Help
 ###############################################################################
+
+# Print one help example with the comment aligned in a fixed column,
+# whatever the length of the script name.
+_print_example() {
+  local args="$1"
+  local comment="$2"
+  printf '    %-56s # %s\n' "$_ME${args:+ $args}" "$comment"
+}
 
 _print_help() {
   cat <<HEREDOC
@@ -458,15 +591,28 @@ OPTIONS:
     -f, --format FORMAT     Output format: text, json, csv (default: text)
     -l, --log FILE          Log detailed output to file
     -u, --user-agent STRING Set custom User-Agent (default: $_USER_AGENT)
+    -s, --source URL        Add a source to check (repeatable)
+    -S, --sources-file FILE Add sources from a file, one URL per line,
+                            blank lines and '#' comments are ignored
+    -i, --include PATTERN   Only check sources whose URL matches the
+                            regular expression (repeatable)
+    -x, --exclude PATTERN   Skip sources whose URL matches the regular
+                            expression (repeatable)
+        --no-color          Disable colored output. Colors are also disabled
+                            when NO_COLOR is set or stdout is not a terminal
 
 PROXY_URL:
     HTTP/HTTPS proxy URL in format: http://host:port or https://host:port
 
 EXAMPLES:
-    $_ME                                    # Basic check
-    $_ME --verbose --timeout 15             # Verbose with longer timeout
-    $_ME --parallel --format json           # Parallel execution with JSON output
-    $_ME --log /tmp/check.log http://proxy:8080  # With logging and proxy
+HEREDOC
+  _print_example "" "Basic check"
+  _print_example "--verbose --timeout 15" "Verbose with longer timeout"
+  _print_example "--parallel --format json" "Parallel execution with JSON output"
+  _print_example "--log /tmp/check.log http://proxy:8080" "With logging and proxy"
+  _print_example "--include elastic --exclude '^http:'" "Only https Elastic sources"
+  _print_example "--sources-file my-sources.txt" "Also check custom sources"
+  cat <<HEREDOC
 
 EXIT CODES:
     0    All sources accessible
@@ -558,6 +704,48 @@ _parse_options() {
         exit 2
       fi
       ;;
+    -s | --source)
+      if [[ -n "${2:-}" ]]; then
+        _add_source "$2" "--source"
+        shift 2
+      else
+        _print_color "$_RED" "ERROR: --source requires a URL argument"
+        exit 2
+      fi
+      ;;
+    -S | --sources-file)
+      if [[ -n "${2:-}" ]]; then
+        _load_sources_file "$2"
+        shift 2
+      else
+        _print_color "$_RED" "ERROR: --sources-file requires a file path argument"
+        exit 2
+      fi
+      ;;
+    -i | --include)
+      if [[ -n "${2:-}" ]]; then
+        _validate_pattern "$2" "--include"
+        _INCLUDE_PATTERNS+=("$2")
+        shift 2
+      else
+        _print_color "$_RED" "ERROR: --include requires a pattern argument"
+        exit 2
+      fi
+      ;;
+    -x | --exclude)
+      if [[ -n "${2:-}" ]]; then
+        _validate_pattern "$2" "--exclude"
+        _EXCLUDE_PATTERNS+=("$2")
+        shift 2
+      else
+        _print_color "$_RED" "ERROR: --exclude requires a pattern argument"
+        exit 2
+      fi
+      ;;
+    --no-color)
+      _disable_colors
+      shift
+      ;;
     http://* | https://*)
       _set_proxy "$1"
       shift
@@ -576,6 +764,9 @@ _parse_options() {
 ###############################################################################
 
 _main() {
+  # Colors first, so every message below honors the terminal and NO_COLOR
+  _setup_colors
+
   # Check dependencies first
   _check_dependencies
 
@@ -587,6 +778,9 @@ _main() {
     _log "Starting check_sources.sh version $_VERSION"
     _log "Options: timeout=$_TIMEOUT, retries=$_RETRIES, parallel=$_PARALLEL, format=$_OUTPUT_FORMAT"
   fi
+
+  # Build the final list of sources
+  _select_sources
 
   # Print CSV header if needed
   if [[ "$_OUTPUT_FORMAT" == "csv" ]]; then
