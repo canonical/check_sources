@@ -83,56 +83,56 @@ _RESULT_FILE=""
 
 # List of HTTP sources
 readonly _HTTP_SOURCES=(
-    ubuntu-cloud.archive.canonical.com
-    nova.cloud.archive.ubuntu.com
-    nova.clouds.archive.ubuntu.com
-    cloud-images.ubuntu.com
-    keyserver.ubuntu.com
-    archive.ubuntu.com
-    security.ubuntu.com
-    usn.ubuntu.com
-    launchpad.net
-    api.launchpad.net
-    ppa.launchpad.net
-    ppa.launchpadcontent.net
-    jujucharms.com
-    jaas.ai
-    charmhub.io
-    api.charmhub.io
-    streams.canonical.com
-    images.maas.io
-    packages.elastic.co
-    artifacts.elastic.co
-    packages.elasticsearch.org
+  ubuntu-cloud.archive.canonical.com
+  nova.cloud.archive.ubuntu.com
+  nova.clouds.archive.ubuntu.com
+  cloud-images.ubuntu.com
+  keyserver.ubuntu.com
+  archive.ubuntu.com
+  security.ubuntu.com
+  usn.ubuntu.com
+  launchpad.net
+  api.launchpad.net
+  ppa.launchpad.net
+  ppa.launchpadcontent.net
+  jujucharms.com
+  jaas.ai
+  charmhub.io
+  api.charmhub.io
+  streams.canonical.com
+  images.maas.io
+  packages.elastic.co
+  artifacts.elastic.co
+  packages.elasticsearch.org
 )
 
 # List of HTTPS sources
 readonly _HTTPS_SOURCES=(
-    cloud-images.ubuntu.com
-    keyserver.ubuntu.com
-    contracts.canonical.com
-    usn.ubuntu.com
-    launchpad.net
-    api.launchpad.net
-    ppa.launchpad.net
-    ppa.launchpadcontent.net
-    jujucharms.com
-    jaas.ai
-    charmhub.io
-    api.charmhub.io
-    entropy.ubuntu.com
-    streams.canonical.com
-    public.apps.ubuntu.com
-    login.ubuntu.com
-    images.maas.io
-    api.snapcraft.io
-    landscape.canonical.com
-    livepatch.canonical.com
-    dashboard.snapcraft.io
-    packages.elastic.co
-    artifacts.elastic.co
-    packages.elasticsearch.org
-    registry.jujucharms.com
+  cloud-images.ubuntu.com
+  keyserver.ubuntu.com
+  contracts.canonical.com
+  usn.ubuntu.com
+  launchpad.net
+  api.launchpad.net
+  ppa.launchpad.net
+  ppa.launchpadcontent.net
+  jujucharms.com
+  jaas.ai
+  charmhub.io
+  api.charmhub.io
+  entropy.ubuntu.com
+  streams.canonical.com
+  public.apps.ubuntu.com
+  login.ubuntu.com
+  images.maas.io
+  api.snapcraft.io
+  landscape.canonical.com
+  livepatch.canonical.com
+  dashboard.snapcraft.io
+  packages.elastic.co
+  artifacts.elastic.co
+  packages.elasticsearch.org
+  registry.jujucharms.com
 )
 
 ###############################################################################
@@ -141,55 +141,55 @@ readonly _HTTPS_SOURCES=(
 
 # Print colored output
 _print_color() {
-    local color="$1"
-    local message="$2"
-    printf "${color}%s${_RESET}\n" "$message"
+  local color="$1"
+  local message="$2"
+  printf "${color}%s${_RESET}\n" "$message"
 }
 
 # Log function
 _log() {
-    local message="$1"
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    
-    if [[ -n "$_LOG_FILE" ]]; then
-        echo "[$timestamp] $message" >> "$_LOG_FILE"
-    fi
-    
-    if [[ "$_VERBOSE" == "true" ]]; then
-        echo "[$timestamp] $message"
-    fi
+  local message="$1"
+  local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+
+  if [[ -n "$_LOG_FILE" ]]; then
+    echo "[$timestamp] $message" >>"$_LOG_FILE"
+  fi
+
+  if [[ "$_VERBOSE" == "true" ]]; then
+    echo "[$timestamp] $message"
+  fi
 }
 
 # Check if command exists
 _command_exists() {
-    command -v "$1" >/dev/null 2>&1
+  command -v "$1" >/dev/null 2>&1
 }
 
 # Validate dependencies
 _check_dependencies() {
-    local missing_deps=()
-    
-    for dep in curl timeout; do
-        if ! _command_exists "$dep"; then
-            missing_deps+=("$dep")
-        fi
-    done
-    
-    if [[ ${#missing_deps[@]} -gt 0 ]]; then
-        _print_color "$_RED" "ERROR: Missing required dependencies: ${missing_deps[*]}"
-        _print_color "$_YELLOW" "Please install the missing dependencies and try again."
-        exit 1
+  local missing_deps=()
+
+  for dep in curl timeout; do
+    if ! _command_exists "$dep"; then
+      missing_deps+=("$dep")
     fi
+  done
+
+  if [[ ${#missing_deps[@]} -gt 0 ]]; then
+    _print_color "$_RED" "ERROR: Missing required dependencies: ${missing_deps[*]}"
+    _print_color "$_YELLOW" "Please install the missing dependencies and try again."
+    exit 1
+  fi
 }
 
 # Validate proxy URL
 _validate_proxy() {
-    local proxy="$1"
-    if [[ ! "$proxy" =~ ^https?://[^/]+:[0-9]+/?$ ]]; then
-        _print_color "$_RED" "ERROR: Invalid proxy URL format: $proxy"
-        _print_color "$_YELLOW" "Expected format: http://host:port or https://host:port"
-        exit 1
-    fi
+  local proxy="$1"
+  if [[ ! "$proxy" =~ ^https?://[^/]+:[0-9]+/?$ ]]; then
+    _print_color "$_RED" "ERROR: Invalid proxy URL format: $proxy"
+    _print_color "$_YELLOW" "Expected format: http://host:port or https://host:port"
+    exit 1
+  fi
 }
 
 ###############################################################################
@@ -197,51 +197,52 @@ _validate_proxy() {
 ###############################################################################
 
 _print_status() {
-    local status="$1"
-    local code="$2"
-    local url="$3"
-    local response_time="${4:-N/A}"
-    
-    case "$_OUTPUT_FORMAT" in
-        "json")
-            printf '{"url":"%s","status":"%s","code":"%s","response_time":"%s"}\n' \
-                "$url" "$status" "$code" "$response_time"
-            ;;
-        "csv")
-            printf '"%s","%s","%s","%s"\n' "$url" "$status" "$code" "$response_time"
-            ;;
-        *)
-            if [[ "$status" == "OK" ]]; then
-                printf "%-50s " "$url"
-                _print_color "$_GREEN" "[$code] OK (${response_time}s)"
-            else
-                printf "%-50s " "$url"
-                _print_color "$_RED" "[$code] FAILED"
-            fi
-            ;;
-    esac
+  local status="$1"
+  local code="$2"
+  local url="$3"
+  local response_time="${4:-N/A}"
+
+  case "$_OUTPUT_FORMAT" in
+  "json")
+    printf '{"url":"%s","status":"%s","code":"%s","response_time":"%s"}\n' \
+      "$url" "$status" "$code" "$response_time"
+    ;;
+  "csv")
+    printf '"%s","%s","%s","%s"\n' "$url" "$status" "$code" "$response_time"
+    ;;
+  *)
+    # Emit the whole line in a single write. In parallel mode several
+    # processes print at once, and separate writes for the URL and
+    # the status would interleave across lines.
+    if [[ "$status" == "OK" ]]; then
+      printf "%-50s ${_GREEN}%s${_RESET}\n" "$url" "[$code] OK (${response_time}s)"
+    else
+      printf "%-50s ${_RED}%s${_RESET}\n" "$url" "[$code] FAILED"
+    fi
+    ;;
+  esac
 }
 
 _print_summary() {
-    local total=$((_SUCCESS_COUNT + _FAILURE_COUNT))
-    
-    if [[ "$_OUTPUT_FORMAT" == "text" ]]; then
-        echo
-        _print_color "$_BLUE" "=== SUMMARY ==="
-        echo "Total sources checked: $total"
-        _print_color "$_GREEN" "Successful: $_SUCCESS_COUNT"
-        _print_color "$_RED" "Failed: $_FAILURE_COUNT"
-        
-        if [[ $_FAILURE_COUNT -gt 0 ]]; then
-            echo
-            _print_color "$_YELLOW" "Failed sources:"
-            for result in "${_RESULTS[@]}"; do
-                if [[ "$result" == *"FAILED"* ]]; then
-                    echo "  $result"
-                fi
-            done
+  local total=$((_SUCCESS_COUNT + _FAILURE_COUNT))
+
+  if [[ "$_OUTPUT_FORMAT" == "text" ]]; then
+    echo
+    _print_color "$_BLUE" "=== SUMMARY ==="
+    echo "Total sources checked: $total"
+    _print_color "$_GREEN" "Successful: $_SUCCESS_COUNT"
+    _print_color "$_RED" "Failed: $_FAILURE_COUNT"
+
+    if [[ $_FAILURE_COUNT -gt 0 ]]; then
+      echo
+      _print_color "$_YELLOW" "Failed sources:"
+      for result in "${_RESULTS[@]}"; do
+        if [[ "$result" == *"FAILED"* ]]; then
+          echo "  $result"
         fi
+      done
     fi
+  fi
 }
 
 ###############################################################################
@@ -249,154 +250,154 @@ _print_summary() {
 ###############################################################################
 
 _set_proxy() {
-    local proxy="$1"
-    _validate_proxy "$proxy"
-    _PROXY_URL="$proxy"
-    _log "Proxy set to: $proxy"
+  local proxy="$1"
+  _validate_proxy "$proxy"
+  _PROXY_URL="$proxy"
+  _log "Proxy set to: $proxy"
 }
 
 # Record one check outcome. Writes to _RESULT_FILE when running as a
 # background job, otherwise updates the in-process counters directly.
 _record_result() {
-    local status="$1"
-    local url="$2"
-    local code="$3"
+  local status="$1"
+  local url="$2"
+  local code="$3"
 
-    if [[ -n "$_RESULT_FILE" ]]; then
-        printf '%s\t%s\t%s\n' "$status" "$url" "$code" >> "$_RESULT_FILE"
-        return 0
-    fi
+  if [[ -n "$_RESULT_FILE" ]]; then
+    printf '%s\t%s\t%s\n' "$status" "$url" "$code" >>"$_RESULT_FILE"
+    return 0
+  fi
 
-    _RESULTS+=("$url: $status [$code]")
-    if [[ "$status" == "OK" ]]; then
-        _SUCCESS_COUNT=$((_SUCCESS_COUNT + 1))
-    else
-        _FAILURE_COUNT=$((_FAILURE_COUNT + 1))
-    fi
+  _RESULTS+=("$url: $status [$code]")
+  if [[ "$status" == "OK" ]]; then
+    _SUCCESS_COUNT=$((_SUCCESS_COUNT + 1))
+  else
+    _FAILURE_COUNT=$((_FAILURE_COUNT + 1))
+  fi
 }
 
 _check_single_source() {
-    local protocol="$1"
-    local source="$2"
-    local url="${protocol}://${source}"
-    
-    _log "Checking: $url"
-    
-    # Measure response time
-    local start_time=$(date +%s.%N)
-    
-    # Perform the check with retries
-    local attempt=1
-    local status_code=""
-    
-    while [[ $attempt -le $_RETRIES ]]; do
-        if [[ $attempt -gt 1 ]]; then
-            _log "Retry attempt $attempt for $url"
-            sleep 1
-        fi
-        
-        # Build curl command with optional proxy
-        local curl_cmd=(
-            curl
-            -s -m "$_TIMEOUT" -o /dev/null
-            -w "%{http_code}"
-            -I --insecure
-            -A "$_USER_AGENT"
-            --connect-timeout 5
-        )
-        
-        # Add proxy if set
-        if [[ -n "$_PROXY_URL" ]]; then
-            curl_cmd+=(--proxy "$_PROXY_URL")
-        fi
-        
-        curl_cmd+=("$url")
-        
-        status_code=$(timeout "$_TIMEOUT" "${curl_cmd[@]}" 2>/dev/null || echo "TIMEOUT")
-        
-        if [[ "$status_code" != "TIMEOUT" ]] && [[ "$status_code" =~ ^[0-9]+$ ]]; then
-            break
-        fi
-        
-        ((attempt++))
-    done
-    
-    local end_time=$(date +%s.%N)
-    local response_time=$(echo "$end_time - $start_time" | bc -l 2>/dev/null || echo "N/A")
-    
-    # Determine if successful
-    if [[ "$status_code" =~ ^(2[0-9][0-9]|3[0-9][0-9]|400|404|405)$ ]]; then
-        _print_status "OK" "$status_code" "$url" "$response_time"
-        _record_result "OK" "$url" "$status_code"
-        return 0
-    else
-        _print_status "FAILED" "$status_code" "$url" "$response_time"
-        _record_result "FAILED" "$url" "$status_code"
-        return 1
+  local protocol="$1"
+  local source="$2"
+  local url="${protocol}://${source}"
+
+  _log "Checking: $url"
+
+  # Measure response time
+  local start_time=$(date +%s.%N)
+
+  # Perform the check with retries
+  local attempt=1
+  local status_code=""
+
+  while [[ $attempt -le $_RETRIES ]]; do
+    if [[ $attempt -gt 1 ]]; then
+      _log "Retry attempt $attempt for $url"
+      sleep 1
     fi
+
+    # Build curl command with optional proxy
+    local curl_cmd=(
+      curl
+      -s -m "$_TIMEOUT" -o /dev/null
+      -w "%{http_code}"
+      -I --insecure
+      -A "$_USER_AGENT"
+      --connect-timeout 5
+    )
+
+    # Add proxy if set
+    if [[ -n "$_PROXY_URL" ]]; then
+      curl_cmd+=(--proxy "$_PROXY_URL")
+    fi
+
+    curl_cmd+=("$url")
+
+    status_code=$(timeout "$_TIMEOUT" "${curl_cmd[@]}" 2>/dev/null || echo "TIMEOUT")
+
+    if [[ "$status_code" != "TIMEOUT" ]] && [[ "$status_code" =~ ^[0-9]+$ ]]; then
+      break
+    fi
+
+    ((attempt++))
+  done
+
+  local end_time=$(date +%s.%N)
+  local response_time=$(echo "$end_time - $start_time" | bc -l 2>/dev/null || echo "N/A")
+
+  # Determine if successful
+  if [[ "$status_code" =~ ^(2[0-9][0-9]|3[0-9][0-9]|400|404|405)$ ]]; then
+    _print_status "OK" "$status_code" "$url" "$response_time"
+    _record_result "OK" "$url" "$status_code"
+    return 0
+  else
+    _print_status "FAILED" "$status_code" "$url" "$response_time"
+    _record_result "FAILED" "$url" "$status_code"
+    return 1
+  fi
 }
 
 _check_sources_parallel() {
-    local protocol="$1"
-    local sources_var="$2"
-    local -n sources="$sources_var"
+  local protocol="$1"
+  local sources_var="$2"
+  local -n sources="$sources_var"
 
-    local pids=()
+  local pids=()
 
-    # Background jobs run in subshells and cannot update the parent's
-    # counters, so each one appends to a shared file that is read back
-    # once every job has finished.
-    _RESULT_FILE=$(mktemp)
+  # Background jobs run in subshells and cannot update the parent's
+  # counters, so each one appends to a shared file that is read back
+  # once every job has finished.
+  _RESULT_FILE=$(mktemp)
 
-    for source in "${sources[@]}"; do
-        _check_single_source "$protocol" "$source" &
-        pids+=($!)
-    done
+  for source in "${sources[@]}"; do
+    _check_single_source "$protocol" "$source" &
+    pids+=($!)
+  done
 
-    # Wait for all background processes. A failed check returns 1, which
-    # must not abort the script under errexit.
-    for pid in "${pids[@]}"; do
-        wait "$pid" || true
-    done
+  # Wait for all background processes. A failed check returns 1, which
+  # must not abort the script under errexit.
+  for pid in "${pids[@]}"; do
+    wait "$pid" || true
+  done
 
-    local result_file="$_RESULT_FILE"
-    _RESULT_FILE=""
+  local result_file="$_RESULT_FILE"
+  _RESULT_FILE=""
 
-    local status url code
-    while IFS=$'\t' read -r status url code; do
-        _record_result "$status" "$url" "$code"
-    done < "$result_file"
+  local status url code
+  while IFS=$'\t' read -r status url code; do
+    _record_result "$status" "$url" "$code"
+  done <"$result_file"
 
-    rm -f "$result_file"
+  rm -f "$result_file"
 }
 
 _check_sources_sequential() {
-    local protocol="$1"
-    local sources_var="$2"
-    local -n sources="$sources_var"
-    
-    for source in "${sources[@]}"; do
-        # A failed check returns 1; do not let errexit abort the run.
-        _check_single_source "$protocol" "$source" || true
-    done
+  local protocol="$1"
+  local sources_var="$2"
+  local -n sources="$sources_var"
+
+  for source in "${sources[@]}"; do
+    # A failed check returns 1; do not let errexit abort the run.
+    _check_single_source "$protocol" "$source" || true
+  done
 }
 
 _check_protocol() {
-    local protocol="$1"
-    local protocol_upper=$(echo "$protocol" | tr '[:lower:]' '[:upper:]')
-    
-    if [[ "$_OUTPUT_FORMAT" == "text" ]]; then
-        echo
-        _print_color "$_BLUE" "=== Checking $protocol_upper sources ==="
-    fi
-    
-    local sources_var="_${protocol_upper}_SOURCES"
-    
-    if [[ "$_PARALLEL" == "true" ]]; then
-        _check_sources_parallel "$protocol" "$sources_var"
-    else
-        _check_sources_sequential "$protocol" "$sources_var"
-    fi
+  local protocol="$1"
+  local protocol_upper=$(echo "$protocol" | tr '[:lower:]' '[:upper:]')
+
+  if [[ "$_OUTPUT_FORMAT" == "text" ]]; then
+    echo
+    _print_color "$_BLUE" "=== Checking $protocol_upper sources ==="
+  fi
+
+  local sources_var="_${protocol_upper}_SOURCES"
+
+  if [[ "$_PARALLEL" == "true" ]]; then
+    _check_sources_parallel "$protocol" "$sources_var"
+  else
+    _check_sources_sequential "$protocol" "$sources_var"
+  fi
 }
 
 ###############################################################################
@@ -404,7 +405,7 @@ _check_protocol() {
 ###############################################################################
 
 _print_help() {
-    cat <<HEREDOC
+  cat <<HEREDOC
       _               _
   ___| |__   ___  ___| | __    ___  ___  _   _ _ __ ___ ___  ___
  / __| '_ \\ / _ \\/ __| |/ /   / __|/ _ \\| | | | '__/ __/ _ \\/ __|
@@ -447,7 +448,7 @@ HEREDOC
 }
 
 _print_version() {
-    echo "$_ME version $_VERSION"
+  echo "$_ME version $_VERSION"
 }
 
 ###############################################################################
@@ -455,82 +456,82 @@ _print_version() {
 ###############################################################################
 
 _parse_options() {
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            -h|--help)
-                _print_help
-                exit 0
-                ;;
-            -v|--version)
-                _print_version
-                exit 0
-                ;;
-            -V|--verbose)
-                _VERBOSE=true
-                shift
-                ;;
-            -t|--timeout)
-                if [[ -n "${2:-}" ]] && [[ "$2" =~ ^[0-9]+$ ]]; then
-                    _TIMEOUT="$2"
-                    shift 2
-                else
-                    _print_color "$_RED" "ERROR: --timeout requires a numeric argument"
-                    exit 2
-                fi
-                ;;
-            -r|--retries)
-                if [[ -n "${2:-}" ]] && [[ "$2" =~ ^[0-9]+$ ]]; then
-                    _RETRIES="$2"
-                    shift 2
-                else
-                    _print_color "$_RED" "ERROR: --retries requires a numeric argument"
-                    exit 2
-                fi
-                ;;
-            -p|--parallel)
-                _PARALLEL=true
-                shift
-                ;;
-            -f|--format)
-                if [[ -n "${2:-}" ]] && [[ "$2" =~ ^(text|json|csv)$ ]]; then
-                    _OUTPUT_FORMAT="$2"
-                    shift 2
-                else
-                    _print_color "$_RED" "ERROR: --format must be one of: text, json, csv"
-                    exit 2
-                fi
-                ;;
-            -l|--log)
-                if [[ -n "${2:-}" ]]; then
-                    _LOG_FILE="$2"
-                    # Create log file directory if it doesn't exist
-                    mkdir -p "$(dirname "$_LOG_FILE")"
-                    shift 2
-                else
-                    _print_color "$_RED" "ERROR: --log requires a file path argument"
-                    exit 2
-                fi
-                ;;
-            -u|--user-agent)
-                if [[ -n "${2:-}" ]]; then
-                    _USER_AGENT="$2"
-                    shift 2
-                else
-                    _print_color "$_RED" "ERROR: --user-agent requires a string argument"
-                    exit 2
-                fi
-                ;;
-            http://*|https://*)
-                _set_proxy "$1"
-                shift
-                ;;
-            *)
-                _print_color "$_RED" "ERROR: Unknown option: $1"
-                _print_help
-                exit 2
-                ;;
-        esac
-    done
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+    -h | --help)
+      _print_help
+      exit 0
+      ;;
+    -v | --version)
+      _print_version
+      exit 0
+      ;;
+    -V | --verbose)
+      _VERBOSE=true
+      shift
+      ;;
+    -t | --timeout)
+      if [[ -n "${2:-}" ]] && [[ "$2" =~ ^[0-9]+$ ]]; then
+        _TIMEOUT="$2"
+        shift 2
+      else
+        _print_color "$_RED" "ERROR: --timeout requires a numeric argument"
+        exit 2
+      fi
+      ;;
+    -r | --retries)
+      if [[ -n "${2:-}" ]] && [[ "$2" =~ ^[0-9]+$ ]]; then
+        _RETRIES="$2"
+        shift 2
+      else
+        _print_color "$_RED" "ERROR: --retries requires a numeric argument"
+        exit 2
+      fi
+      ;;
+    -p | --parallel)
+      _PARALLEL=true
+      shift
+      ;;
+    -f | --format)
+      if [[ -n "${2:-}" ]] && [[ "$2" =~ ^(text|json|csv)$ ]]; then
+        _OUTPUT_FORMAT="$2"
+        shift 2
+      else
+        _print_color "$_RED" "ERROR: --format must be one of: text, json, csv"
+        exit 2
+      fi
+      ;;
+    -l | --log)
+      if [[ -n "${2:-}" ]]; then
+        _LOG_FILE="$2"
+        # Create log file directory if it doesn't exist
+        mkdir -p "$(dirname "$_LOG_FILE")"
+        shift 2
+      else
+        _print_color "$_RED" "ERROR: --log requires a file path argument"
+        exit 2
+      fi
+      ;;
+    -u | --user-agent)
+      if [[ -n "${2:-}" ]]; then
+        _USER_AGENT="$2"
+        shift 2
+      else
+        _print_color "$_RED" "ERROR: --user-agent requires a string argument"
+        exit 2
+      fi
+      ;;
+    http://* | https://*)
+      _set_proxy "$1"
+      shift
+      ;;
+    *)
+      _print_color "$_RED" "ERROR: Unknown option: $1"
+      _print_help
+      exit 2
+      ;;
+    esac
+  done
 }
 
 ###############################################################################
@@ -538,36 +539,36 @@ _parse_options() {
 ###############################################################################
 
 _main() {
-    # Check dependencies first
-    _check_dependencies
-    
-    # Parse command line options
-    _parse_options "$@"
-    
-    # Initialize log file
-    if [[ -n "$_LOG_FILE" ]]; then
-        _log "Starting check_sources.sh version $_VERSION"
-        _log "Options: timeout=$_TIMEOUT, retries=$_RETRIES, parallel=$_PARALLEL, format=$_OUTPUT_FORMAT"
-    fi
-    
-    # Print CSV header if needed
-    if [[ "$_OUTPUT_FORMAT" == "csv" ]]; then
-        echo "URL,Status,Code,ResponseTime"
-    fi
-    
-    # Run the checks
-    _check_protocol "http"
-    _check_protocol "https"
-    
-    # Print summary
-    _print_summary
-    
-    # Exit with appropriate code
-    if [[ $_FAILURE_COUNT -gt 0 ]]; then
-        exit 1
-    else
-        exit 0
-    fi
+  # Check dependencies first
+  _check_dependencies
+
+  # Parse command line options
+  _parse_options "$@"
+
+  # Initialize log file
+  if [[ -n "$_LOG_FILE" ]]; then
+    _log "Starting check_sources.sh version $_VERSION"
+    _log "Options: timeout=$_TIMEOUT, retries=$_RETRIES, parallel=$_PARALLEL, format=$_OUTPUT_FORMAT"
+  fi
+
+  # Print CSV header if needed
+  if [[ "$_OUTPUT_FORMAT" == "csv" ]]; then
+    echo "URL,Status,Code,ResponseTime"
+  fi
+
+  # Run the checks
+  _check_protocol "http"
+  _check_protocol "https"
+
+  # Print summary
+  _print_summary
+
+  # Exit with appropriate code
+  if [[ $_FAILURE_COUNT -gt 0 ]]; then
+    exit 1
+  else
+    exit 0
+  fi
 }
 
 # Call main function with all arguments
