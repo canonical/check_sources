@@ -1,0 +1,8 @@
+# markdownlint configuration
+# https://github.com/DavidAnson/markdownlint
+
+# Enable all rules by default
+default: true
+
+# MD013: line length. Disabled so long lines in prose and tables are allowed.
+MD013: false
