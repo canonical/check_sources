@@ -276,6 +276,17 @@ _record_result() {
   fi
 }
 
+# Map a curl (or timeout) exit status to a short label for the report.
+_curl_error_label() {
+  case "$1" in
+    28|124) echo "TIMEOUT" ;;
+    6)      echo "DNS" ;;
+    7)      echo "REFUSED" ;;
+    35|60)  echo "TLS" ;;
+    *)      echo "ERR$1" ;;
+  esac
+}
+
 _check_single_source() {
   local protocol="$1"
   local source="$2"
@@ -313,11 +324,16 @@ _check_single_source() {
 
     curl_cmd+=("$url")
 
-    status_code=$(timeout "$_TIMEOUT" "${curl_cmd[@]}" 2>/dev/null || echo "TIMEOUT")
+    # curl prints "000" as the HTTP code whenever no response arrived, so
+    # its exit status is what tells the failure modes apart.
+    local curl_exit=0
+    status_code=$(timeout "$_TIMEOUT" "${curl_cmd[@]}" 2>/dev/null) || curl_exit=$?
 
-    if [[ "$status_code" != "TIMEOUT" ]] && [[ "$status_code" =~ ^[0-9]+$ ]]; then
+    if [[ $curl_exit -eq 0 ]] && [[ "$status_code" =~ ^[0-9]+$ ]] && [[ "$status_code" != "000" ]]; then
       break
     fi
+
+    status_code=$(_curl_error_label "$curl_exit")
 
     ((attempt++))
   done
