@@ -69,6 +69,7 @@ _RETRIES=2
 _PARALLEL=false
 _VERBOSE=false
 _OUTPUT_FORMAT="text"
+_MAX_REDIRS=10
 _LOG_FILE=""
 _USER_AGENT="check_sources/${_VERSION}"
 _PROXY_URL=""
@@ -232,30 +233,41 @@ _print_status() {
   local code="$2"
   local url="$3"
   local response_time="${4:-N/A}"
+  local final_url="${5:-$url}"
+  local redirect_count="${6:-0}"
+
+  # The machine-readable formats always carry the destination, so that their
+  # schema does not change from source to source. The text format only
+  # mentions it when the request actually moved somewhere else.
+  local redirect_note=""
+  if [[ "$redirect_count" -gt 0 ]] && [[ "$final_url" != "$url" ]]; then
+    redirect_note=" -> $final_url"
+  fi
 
   case "$_OUTPUT_FORMAT" in
   "json")
-    printf '{"url":"%s","status":"%s","code":"%s","response_time":"%s"}\n' \
-      "$url" "$status" "$code" "$response_time"
+    printf '{"url":"%s","status":"%s","code":"%s","response_time":"%s","redirects":"%s","final_url":"%s"}\n' \
+      "$url" "$status" "$code" "$response_time" "$redirect_count" "$final_url"
     ;;
   "csv")
-    printf '"%s","%s","%s","%s"\n' "$url" "$status" "$code" "$response_time"
+    printf '"%s","%s","%s","%s","%s","%s"\n' \
+      "$url" "$status" "$code" "$response_time" "$redirect_count" "$final_url"
     ;;
   "yaml")
     # One flow mapping per line, not a block mapping. Bash writes printf
     # output one line at a time, so in parallel mode a multi-line record
     # would interleave with the records of the other subshells.
-    printf -- '- {url: "%s", status: "%s", code: "%s", response_time: "%s"}\n' \
-      "$url" "$status" "$code" "$response_time"
+    printf -- '- {url: "%s", status: "%s", code: "%s", response_time: "%s", redirects: "%s", final_url: "%s"}\n' \
+      "$url" "$status" "$code" "$response_time" "$redirect_count" "$final_url"
     ;;
   *)
     # Emit the whole line in a single write. In parallel mode several
     # processes print at once, and separate writes for the URL and
     # the status would interleave across lines.
     if [[ "$status" == "OK" ]]; then
-      printf "%-50s ${_GREEN}%s${_RESET}\n" "$url" "[$code] OK (${response_time}s)"
+      printf "%-50s ${_GREEN}%s${_RESET}%s\n" "$url" "[$code] OK (${response_time}s)" "$redirect_note"
     else
-      printf "%-50s ${_RED}%s${_RESET}\n" "$url" "[$code] FAILED"
+      printf "%-50s ${_RED}%s${_RESET}%s\n" "$url" "[$code] FAILED" "$redirect_note"
     fi
     ;;
   esac
@@ -419,6 +431,7 @@ _curl_error_label() {
     6)      echo "DNS" ;;
     7)      echo "REFUSED" ;;
     35|60)  echo "TLS" ;;
+    47)     echo "REDIRS" ;;
     *)      echo "ERR$1" ;;
   esac
 }
@@ -435,6 +448,8 @@ _check_single_source() {
   # Perform the check with retries
   local attempt=1
   local status_code=""
+  local redirect_count=0
+  local final_url="$url"
 
   while [[ $attempt -le $_RETRIES ]]; do
     if [[ $attempt -gt 1 ]]; then
@@ -442,12 +457,15 @@ _check_single_source() {
       sleep 1
     fi
 
-    # Build curl command with optional proxy
+    # Build curl command with optional proxy. Redirects are followed so that
+    # the code being judged is the one of the destination: a 3xx on its own
+    # only proves that something answered, and on a filtered network that
+    # something is often a portal redirecting to a login or block page.
     local curl_cmd=(
       curl
       -s -m "$_TIMEOUT" -o /dev/null
-      -w "%{http_code}"
-      -I --insecure
+      -w '%{http_code}\t%{num_redirects}\t%{url_effective}'
+      -I --insecure -L --max-redirs "$_MAX_REDIRS"
       -A "$_USER_AGENT"
       --connect-timeout 5
     )
@@ -461,14 +479,24 @@ _check_single_source() {
 
     # curl prints "000" as the HTTP code whenever no response arrived, so
     # its exit status is what tells the failure modes apart.
-    local curl_exit=0
-    status_code=$(timeout "$_TIMEOUT" "${curl_cmd[@]}" 2>/dev/null) || curl_exit=$?
+    local curl_exit=0 curl_out=""
+    curl_out=$(timeout "$_TIMEOUT" "${curl_cmd[@]}" 2>/dev/null) || curl_exit=$?
+
+    # The three -w fields are tab separated, and the global IFS already splits
+    # on tabs, so it is set explicitly here only to keep newlines out of it.
+    status_code=""
+    redirect_count=0
+    final_url="$url"
+    IFS=$'\t' read -r status_code redirect_count final_url <<<"$curl_out" || true
+    : "${status_code:=}" "${redirect_count:=0}" "${final_url:=$url}"
 
     if [[ $curl_exit -eq 0 ]] && [[ "$status_code" =~ ^[0-9]+$ ]] && [[ "$status_code" != "000" ]]; then
       break
     fi
 
     status_code=$(_curl_error_label "$curl_exit")
+    redirect_count=0
+    final_url="$url"
 
     ((attempt++))
   done
@@ -477,13 +505,22 @@ _check_single_source() {
   end_time=$(date +%s.%N)
   response_time=$(echo "$end_time - $start_time" | bc -l 2>/dev/null || echo "N/A")
 
-  # Determine if successful
-  if [[ "$status_code" =~ ^(2[0-9][0-9]|3[0-9][0-9]|400|404|405)$ ]]; then
-    _print_status "OK" "$status_code" "$url" "$response_time"
+  # Determine if successful. The probe is a HEAD on the root of the host, not
+  # on a repository file, so the code says little about the service and almost
+  # everything about the network path: any of these means the origin itself
+  # answered. 400, 404 and 405 are how several of the hosts below react to a
+  # HEAD on their root, and 401 and 429 come from the origin as well.
+  #
+  # 403 is deliberately left out: it is what a filtering proxy returns when it
+  # blocks a URL, which is exactly what this script exists to detect. 407 and
+  # 5xx are left out for the same reason, as they point at the proxy rather
+  # than at the origin.
+  if [[ "$status_code" =~ ^(2[0-9][0-9]|3[0-9][0-9]|400|401|404|405|429)$ ]]; then
+    _print_status "OK" "$status_code" "$url" "$response_time" "$final_url" "$redirect_count"
     _record_result "OK" "$url" "$status_code"
     return 0
   else
-    _print_status "FAILED" "$status_code" "$url" "$response_time"
+    _print_status "FAILED" "$status_code" "$url" "$response_time" "$final_url" "$redirect_count"
     _record_result "FAILED" "$url" "$status_code"
     return 1
   fi
@@ -627,11 +664,12 @@ EXIT CODES:
     2    Invalid arguments or missing dependencies
 
 FAILURE LABELS:
-    Shown in the code column when no HTTP response arrived:
+    Shown in the code column instead of an HTTP status code:
     TIMEOUT  No response within the timeout
     DNS      Hostname could not be resolved
     REFUSED  Connection refused or could not be established
     TLS      TLS handshake or certificate error
+    REDIRS   More than $_MAX_REDIRS redirects, or a redirect loop
     ERR<n>   Any other curl failure, <n> is the curl exit code
 
 HEREDOC
@@ -791,7 +829,7 @@ _main() {
 
   # Print CSV header if needed
   if [[ "$_OUTPUT_FORMAT" == "csv" ]]; then
-    echo "URL,Status,Code,ResponseTime"
+    echo "URL,Status,Code,ResponseTime,Redirects,FinalURL"
   fi
 
   # Run the checks

@@ -131,12 +131,18 @@ Colored output is used only when standard output is a terminal. It is turned off
 
 ### Output Formats
 
-| Format | Structure                                | Headers and summary | Example line                                                    |
-|--------|------------------------------------------|---------------------|-----------------------------------------------------------------|
-| `text` | Aligned columns, colored when on a tty   | Yes                 | `http://example.com                [200] OK (0.042s)`           |
-| `json` | One JSON object per line                 | No                  | `{"url":"http://example.com","status":"OK","code":"200",...}`   |
-| `csv`  | Header row, then one quoted row per line | No                  | `"http://example.com","OK","200","0.042"`                       |
-| `yaml` | One list item per line                   | No                  | `- {url: "http://example.com", status: "OK", code: "200", ...}` |
+| Format | Structure                                | Headers and summary | Example line                                                          |
+|--------|------------------------------------------|---------------------|-----------------------------------------------------------------------|
+| `text` | Aligned columns, colored when on a tty   | Yes                 | `http://jaas.ai       [200] OK (1.55s) -> https://canonical.com/jaas` |
+| `json` | One JSON object per line                 | No                  | `{"url":"http://jaas.ai","status":"OK","code":"200",...}`             |
+| `csv`  | Header row, then one quoted row per line | No                  | `"http://jaas.ai","OK","200","1.55","1","https://canonical.com/jaas"` |
+| `yaml` | One list item per line                   | No                  | `- {url: "http://jaas.ai", status: "OK", code: "200", ...}`           |
+
+Every record carries six fields: the requested URL, the status, the code, the
+response time, how many redirects were followed, and the URL the request ended
+on. The machine-readable formats always emit all six, so that their schema does
+not change from source to source; `text` appends `-> destination` only when the
+request actually moved somewhere else.
 
 Only `text` prints the per-protocol section headers and the summary block; the
 machine-readable formats emit one record per source and nothing else.
@@ -209,11 +215,22 @@ Run `./check_sources.sh --format csv` to get the exact list of URLs checked, inc
 - **1**: Some sources failed connectivity tests or errors occurred during execution  
 - **2**: Invalid command-line arguments, unreadable sources file, invalid pattern, no sources left after filtering, or missing required dependencies
 
-The script considers 2xx, 3xx, 400, 404, and 405 HTTP status codes as successful connectivity indicators.
+The script considers 2xx, 3xx, 400, 401, 404, 405, and 429 HTTP status codes as successful connectivity indicators. The probe is a `HEAD` on the root of the host rather than on a repository file, so the code says little about the service and almost everything about the network path: each of these means the origin answered.
+
+`403` is deliberately not on the list, because it is what a filtering proxy returns when it blocks a URL, which is one of the conditions this script exists to detect. `407` and `5xx` are excluded for the same reason: they point at the proxy rather than at the origin.
+
+### Redirects
+
+Redirects are followed, up to 10 of them, and the code being judged is the one of the destination. A `3xx` on its own only proves that something answered, and on a filtered network that something is often a portal redirecting to a login or block page; following the redirect turns that case into the `403` or `503` it really is. A chain longer than 10 hops, or a loop, is reported as `REDIRS`.
+
+Two consequences are worth keeping in mind:
+
+- Several of the built-in sources redirect the root path to a completely different host, for example `http://ppa.launchpad.net` to `https://launchpad.net/` and `http://artifacts.elastic.co` to `https://www.elastic.co/downloads/`. The verdict for those sources therefore reflects the destination host, not the one that was asked for. The destination is always reported, so the report can be audited.
+- A `3xx` still counts as a success when it survives as the final code, which now only happens for a redirect without a usable `Location` header.
 
 ## Failure Labels
 
-When a source returns no HTTP response at all, the code column shows a short label derived from the curl exit status instead of an HTTP code. The same label appears in the text, JSON, CSV, and YAML output and in the failed sources list of the summary.
+When a source returns no usable HTTP response, the code column shows a short label derived from the curl exit status instead of an HTTP code. The same label appears in the text, JSON, CSV, and YAML output and in the failed sources list of the summary.
 
 | Label     | Meaning                                                   | curl exit code            |
 |-----------|-----------------------------------------------------------|---------------------------|
@@ -221,6 +238,7 @@ When a source returns no HTTP response at all, the code column shows a short lab
 | `DNS`     | Hostname could not be resolved                            | 6                         |
 | `REFUSED` | Connection refused or could not be established            | 7                         |
 | `TLS`     | TLS handshake or certificate error                        | 35, 60                    |
+| `REDIRS`  | More than 10 redirects, or a redirect loop                | 47                        |
 | `ERR<n>`  | Any other curl failure, where `<n>` is the curl exit code | other                     |
 
 Example:
