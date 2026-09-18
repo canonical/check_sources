@@ -4,6 +4,20 @@
 
 The `check_sources` script is a comprehensive Bash utility that validates connectivity to Canonical package repositories and third-party resources required for infrastructure deployment. Version 2.0.0 introduced configurable options, multiple output formats, parallel execution, and enhanced error handling. Version 2.1.0 adds custom sources, URL filtering, descriptive failure labels, and color-aware output. It's particularly useful for environments where internet access may be restricted or proxied.
 
+## Why Bash, and Why a Single File
+
+The script runs at the moment when connectivity is still an open question, and that constraint rules out most of the alternatives.
+
+**The runtime has to be there already.** Installing a Python package, a Go toolchain or any library would depend on the very network access the script is meant to measure. A stock Ubuntu image ships Bash, `curl` and coreutils, so the only hard requirements are `curl` and `timeout`, both already present. `bc` is optional and degrades to `N/A`.
+
+**Getting it onto the machine has to be trivial.** One executable file can be copied with `scp`, pasted into a console session, or dropped in by cloud-init, then run with `chmod +x`. There is no clone, no build step, no install target, and nothing to uninstall afterwards.
+
+**Whoever owns the network has to be able to read it.** A restricted environment usually means someone must review what is about to probe their perimeter. A single readable file can be reviewed in one sitting; a dependency tree cannot.
+
+**The list of sources travels with the tool.** Keeping the sources in the script rather than in a config file means the file that was reviewed is the file that runs, with no second artifact to keep in sync.
+
+The cost is accepted on purpose: a script long enough that a real language would handle its option parsing, its string work and its testing better, with `shellcheck` as the only automated check.
+
 ## Features
 
 ### Core Functionality
