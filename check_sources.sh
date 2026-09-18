@@ -241,6 +241,13 @@ _print_status() {
   "csv")
     printf '"%s","%s","%s","%s"\n' "$url" "$status" "$code" "$response_time"
     ;;
+  "yaml")
+    # One flow mapping per line, not a block mapping. Bash writes printf
+    # output one line at a time, so in parallel mode a multi-line record
+    # would interleave with the records of the other subshells.
+    printf -- '- {url: "%s", status: "%s", code: "%s", response_time: "%s"}\n' \
+      "$url" "$status" "$code" "$response_time"
+    ;;
   *)
     # Emit the whole line in a single write. In parallel mode several
     # processes print at once, and separate writes for the URL and
@@ -588,7 +595,7 @@ OPTIONS:
     -t, --timeout SECONDS   Set timeout for each check (default: $_TIMEOUT)
     -r, --retries COUNT     Set number of retries for failed checks (default: $_RETRIES)
     -p, --parallel          Run checks in parallel (faster but less readable)
-    -f, --format FORMAT     Output format: text, json, csv (default: text)
+    -f, --format FORMAT     Output format: text, json, csv, yaml (default: text)
     -l, --log FILE          Log detailed output to file
     -u, --user-agent STRING Set custom User-Agent (default: $_USER_AGENT)
     -s, --source URL        Add a source to check (repeatable)
@@ -676,11 +683,11 @@ _parse_options() {
       shift
       ;;
     -f | --format)
-      if [[ -n "${2:-}" ]] && [[ "$2" =~ ^(text|json|csv)$ ]]; then
+      if [[ -n "${2:-}" ]] && [[ "$2" =~ ^(text|json|csv|yaml)$ ]]; then
         _OUTPUT_FORMAT="$2"
         shift 2
       else
-        _print_color "$_RED" "ERROR: --format must be one of: text, json, csv"
+        _print_color "$_RED" "ERROR: --format must be one of: text, json, csv, yaml"
         exit 2
       fi
       ;;

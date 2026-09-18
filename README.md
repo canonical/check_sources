@@ -64,6 +64,9 @@ The `check_sources` script is a comprehensive Bash utility that validates connec
 # CSV output with logging and proxy
 ./check_sources.sh --format csv --log /tmp/check.log http://proxy:8080
 
+# YAML output, one list item per source
+./check_sources.sh --format yaml
+
 # Custom retry settings with specific user agent
 ./check_sources.sh --retries 3 --user-agent "MyOrg-ConnChecker/1.0"
 ```
@@ -116,7 +119,7 @@ Colored output is used only when standard output is a terminal. It is turned off
 -t, --timeout SECONDS   Set timeout for each check (default: 10)
 -r, --retries COUNT     Set number of retries for failed checks (default: 2)
 -p, --parallel          Run checks in parallel (faster execution)
--f, --format FORMAT     Output format: text, json, csv (default: text)  
+-f, --format FORMAT     Output format: text, json, csv, yaml (default: text)  
 -l, --log FILE          Log detailed output to specified file
 -u, --user-agent STRING Set custom User-Agent header
 -s, --source URL        Add a source to check (repeatable)
@@ -125,6 +128,22 @@ Colored output is used only when standard output is a terminal. It is turned off
 -x, --exclude PATTERN   Skip sources whose URL matches the pattern (repeatable)
     --no-color          Disable colored output
 ```
+
+### Output Formats
+
+| Format | Structure                                | Headers and summary | Example line                                                    |
+|--------|------------------------------------------|---------------------|-----------------------------------------------------------------|
+| `text` | Aligned columns, colored when on a tty   | Yes                 | `http://example.com                [200] OK (0.042s)`           |
+| `json` | One JSON object per line                 | No                  | `{"url":"http://example.com","status":"OK","code":"200",...}`   |
+| `csv`  | Header row, then one quoted row per line | No                  | `"http://example.com","OK","200","0.042"`                       |
+| `yaml` | One list item per line                   | No                  | `- {url: "http://example.com", status: "OK", code: "200", ...}` |
+
+Only `text` prints the per-protocol section headers and the summary block; the
+machine-readable formats emit one record per source and nothing else.
+
+The `yaml` format uses a single-line flow mapping per record rather than a block
+mapping, so that records from different sources never interleave in `--parallel`
+mode. It parses to the same structure either way.
 
 ## Dependencies
 
@@ -194,7 +213,7 @@ The script considers 2xx, 3xx, 400, 404, and 405 HTTP status codes as successful
 
 ## Failure Labels
 
-When a source returns no HTTP response at all, the code column shows a short label derived from the curl exit status instead of an HTTP code. The same label appears in the text, JSON, and CSV output and in the failed sources list of the summary.
+When a source returns no HTTP response at all, the code column shows a short label derived from the curl exit status instead of an HTTP code. The same label appears in the text, JSON, CSV, and YAML output and in the failed sources list of the summary.
 
 | Label     | Meaning                                                   | curl exit code            |
 |-----------|-----------------------------------------------------------|---------------------------|
