@@ -2,7 +2,7 @@
 
 ## About
 
-The `check_sources` script is a comprehensive Bash utility that validates connectivity to Canonical package repositories and third-party resources required for infrastructure deployment. Version 2.0.0 introduced configurable options, multiple output formats, parallel execution, and enhanced error handling. Version 2.1.0 adds custom sources, URL filtering, descriptive failure labels, and color-aware output. It's particularly useful for environments where internet access may be restricted or proxied.
+The `check_sources` script is a comprehensive Bash utility that validates connectivity to Canonical package repositories and third-party resources required for infrastructure deployment. Version 2.0.0 introduced configurable options, multiple output formats, parallel execution, and enhanced error handling. Version 2.1.0 adds custom sources, URL filtering, descriptive failure labels, and color-aware output. Version 3.0.0 probes each source the way the application that consumes it does, so a reachable verdict reflects whether that application can use the source. It's particularly useful for environments where internet access may be restricted or proxied.
 
 ## Why Bash, and Why a Single File
 
@@ -43,6 +43,23 @@ The cost is accepted on purpose: a script long enough that a real language would
 - **Failure Labels**: Unreachable sources report `TIMEOUT`, `DNS`, `REFUSED`, `TLS` or `ERR<n>` instead of a bare `000`
 - **Color Aware Output**: Colors are disabled automatically when piped, when `NO_COLOR` is set, or with `--no-color`
 - **Reliable Parallel Mode**: Summary counts and exit code are correct with `--parallel`, and a failed source no longer aborts the run
+
+### What's New (v3.0.0)
+
+- **Probe Profiles**: A source is probed as the application that consumes it. The `apt` profile sends APT's request and requires a complete PGP signed index, so a repository blocked by application-aware network policy is no longer reported reachable
+- **Body Verification**: A profiled source fails when the response is not what the application expects, catching a block page served with `200` and a transfer reset partway through
+- **Release Codename**: `--release` sets the codename in a profiled index path, defaulting to `VERSION_CODENAME` from `/etc/os-release`
+- **YAML Output**: `--format yaml` emits one flow mapping per record
+- **Destination-Based Verdicts**: Redirects are followed and the destination's status code is the one judged, so a portal redirecting to a login or block page is reported as the failure it is
+- **New Failure Labels**: `NOINDEX` and `NOBODY` mark a response that arrived but is not usable
+
+**Breaking changes.** The machine-readable formats are unchanged in schema but not in
+content. The `url` field for the archive hosts is now the index path that was
+requested, for example `http://archive.ubuntu.com/ubuntu/dists/noble/InRelease`
+rather than `http://archive.ubuntu.com`, so a consumer matching those URLs by
+equality needs updating. The set of records is no longer fixed either: on a host
+where no release codename resolves and none is given with `--release`, the profiled
+sources are skipped and do not appear in the output.
 
 ### Validated Services
 
