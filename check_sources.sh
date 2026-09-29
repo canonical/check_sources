@@ -53,7 +53,7 @@ IFS=$'\n\t'
 _ME=$(basename "${0}")
 
 # Version
-_VERSION="2.1.0"
+_VERSION="3.0.0"
 
 # Colors. Cleared by _disable_colors when the output is not a terminal, when
 # the NO_COLOR environment variable is set, or when --no-color is given.
@@ -74,14 +74,37 @@ _LOG_FILE=""
 _USER_AGENT="check_sources/${_VERSION}"
 _PROXY_URL=""
 
+# Set by --user-agent. A profile supplies its own User-Agent, so the override
+# has to be distinguishable from the default rather than merely non-empty.
+_USER_AGENT_SET=false
+
+# Release codename substituted for {codename} in a profiled source path.
+# Taken from --release, otherwise from /etc/os-release.
+_RELEASE=""
+
+# Version reported in the apt profile's User-Agent, resolved from the local
+# apt by _resolve_apt_version. Used when the local system has no apt, which
+# happens when the check runs from a jump box that is not Ubuntu.
+_APT_VERSION_DEFAULT="2.8.3"
+_APT_VERSION="$_APT_VERSION_DEFAULT"
+
+# Per-run scratch directory for response bodies, created by _main and removed
+# by its EXIT trap. Background subshells do not inherit that trap, so the
+# directory survives until every probe has finished.
+_TMPDIR=""
+
 # Extra sources given with --source or --sources-file, appended to _SOURCES
 declare -a _EXTRA_SOURCES=()
 # Regular expressions given with --include and --exclude, matched against
 # the full URL
 declare -a _INCLUDE_PATTERNS=()
 declare -a _EXCLUDE_PATTERNS=()
-# Final list of URLs to check, built by _select_sources
+# Final list of sources to check, built by _select_sources. Each entry is
+# "url|profile", with {codename} already substituted.
 declare -a _URLS=()
+# Sources left out because their path needs a release codename and none was
+# available. Reported once, and counted as neither success nor failure.
+declare -a _SKIPPED=()
 
 # Results tracking
 declare -a _RESULTS=()
@@ -92,21 +115,90 @@ declare -i _FAILURE_COUNT=0
 # cannot modify the parent's variables.
 _RESULT_FILE=""
 
-# Sources to check, one URL per line. A host that must be reachable over
+# Probe profiles. A profile decides what request a source gets and what
+# counts as reachable, so that a source is probed the way the application
+# that will consume it probes it. A network that classifies traffic by
+# request fingerprint then treats the probe as it treats that application.
+#
+# Fields:
+#   method      HTTP method
+#   user_agent  User-Agent, empty to use the script default
+#   headers     Extra request headers, one per line, empty for none
+#   ok_codes    Status codes that count as reachable
+#   assert      Literal prefix the response body must start with, empty for
+#               no body check. A profile with an assertion downloads the
+#               whole body, because a transfer that is reset partway through
+#               is exactly the failure this check exists to catch.
+#
+# Accepted profile names, used to validate --source and --sources-file.
+readonly _PROFILES="generic apt"
+
+_profile_field() {
+  local profile="$1"
+  local field="$2"
+
+  case "${profile}.${field}" in
+    generic.method)     echo "HEAD" ;;
+    generic.user_agent) echo "" ;;
+    generic.headers)    echo "" ;;
+    # A HEAD on a host root: 400, 404 and 405 are how several of the hosts
+    # below answer it, and 401 and 429 come from the origin as well. 403,
+    # 407 and 5xx are left out, because they are what a filtering proxy
+    # returns when it blocks a URL, which is what this script detects.
+    generic.ok_codes)   echo '^(2[0-9][0-9]|3[0-9][0-9]|400|401|404|405|429)$' ;;
+    generic.assert)     echo "" ;;
+
+    apt.method)         echo "GET" ;;
+    # The literal apt sends. "Debian" is part of it because Ubuntu ships
+    # apt with the identifier its upstream compiles in, so this is what a
+    # traffic classifier sees from an Ubuntu host, not a reference to
+    # another distribution. The version comes from the local apt.
+    apt.user_agent)     echo "Debian APT-HTTP/1.3 (${_APT_VERSION})" ;;
+    apt.headers)        printf '%s\n%s\n%s\n' "Accept: text/*" "Cache-Control: max-age=0" "Connection: keep-alive" ;;
+    # A repository index either arrives or it does not. Unlike a host root,
+    # there is no status other than success that means the source is usable.
+    apt.ok_codes)       echo '^2[0-9][0-9]$' ;;
+    apt.assert)         echo "-----BEGIN PGP SIGNED MESSAGE-----" ;;
+
+    *) return 1 ;;
+  esac
+}
+
+# Split a "url|profile" entry. Prints the URL and the profile separated by a
+# tab; an entry without a '|' resolves to the generic profile.
+_split_source() {
+  local entry="$1"
+
+  if [[ "$entry" == *"|"* ]]; then
+    printf '%s\t%s\n' "${entry%%|*}" "${entry##*|}"
+  else
+    printf '%s\t%s\n' "$entry" "generic"
+  fi
+}
+
+# Sources to check, one entry per line. A host that must be reachable over
 # both protocols is listed twice, side by side. The protocol sections in the
 # report are derived from the URL scheme, in the order listed here.
+#
+# An entry may name a probe profile by appending "|<profile>". Without one it
+# is probed generically, so adding a plain host is still one line per
+# protocol. A profiled entry carries its own path, because archive layouts
+# differ; {codename} in that path is replaced with the release codename.
 readonly _SOURCES=(
   # Ubuntu archives and cloud images
+  # The cloud archive is left generic: its index path needs an OpenStack
+  # release segment as well as a codename, so there is no repository-wide
+  # path to probe.
   http://ubuntu-cloud.archive.canonical.com
-  http://nova.cloud.archive.ubuntu.com
-  http://nova.clouds.archive.ubuntu.com
+  "http://nova.cloud.archive.ubuntu.com/ubuntu/dists/{codename}/InRelease|apt"
+  "http://nova.clouds.archive.ubuntu.com/ubuntu/dists/{codename}/InRelease|apt"
   http://cloud-images.ubuntu.com
   https://cloud-images.ubuntu.com
   http://keyserver.ubuntu.com
   https://keyserver.ubuntu.com
   https://contracts.canonical.com
-  http://archive.ubuntu.com
-  http://security.ubuntu.com
+  "http://archive.ubuntu.com/ubuntu/dists/{codename}/InRelease|apt"
+  "http://security.ubuntu.com/ubuntu/dists/{codename}-security/InRelease|apt"
   http://usn.ubuntu.com
   https://usn.ubuntu.com
   # Launchpad
@@ -299,10 +391,15 @@ _print_summary() {
 # Source Selection
 ###############################################################################
 
-# Validate and add one user supplied source URL
+# Validate and add one user supplied source. Accepts the same "url|profile"
+# syntax as the built-in list, so an internal mirror can be probed with an
+# application profile without editing this file.
 _add_source() {
-  local url="$1"
+  local entry="$1"
   local origin="$2"
+  local url profile
+
+  IFS=$'\t' read -r url profile < <(_split_source "$entry")
 
   if [[ ! "$url" =~ ^https?://[^[:space:]]+$ ]]; then
     _print_color "$_RED" "ERROR: Invalid source URL in $origin: $url"
@@ -310,7 +407,13 @@ _add_source() {
     exit 2
   fi
 
-  _EXTRA_SOURCES+=("$url")
+  if ! _profile_field "$profile" method >/dev/null 2>&1; then
+    _print_color "$_RED" "ERROR: Unknown probe profile in $origin: $profile"
+    _print_color "$_YELLOW" "Expected one of: $_PROFILES"
+    exit 2
+  fi
+
+  _EXTRA_SOURCES+=("${url}|${profile}")
 }
 
 # Read sources from a file: one URL per line, blank lines and everything
@@ -355,10 +458,55 @@ _validate_pattern() {
 # Build _URLS from the built-in and extra sources, applying the include and
 # exclude patterns. A URL is kept when it matches at least one include
 # pattern (or none were given) and matches no exclude pattern.
-_select_sources() {
-  local url pattern keep
+# Resolve the version the apt profile reports. apt prints the same version it
+# compiles into its User-Agent, so asking the local binary keeps the probe
+# faithful to the apt that will consume the source. A host without apt keeps
+# the default.
+_resolve_apt_version() {
+  local reported=""
 
-  for url in "${_SOURCES[@]}" ${_EXTRA_SOURCES[@]+"${_EXTRA_SOURCES[@]}"}; do
+  if _command_exists apt-get; then
+    # "apt 2.8.3 (amd64)"
+    reported=$(apt-get --version 2>/dev/null | head -1 | awk '{print $2}') || reported=""
+  fi
+
+  if [[ "$reported" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+    _APT_VERSION="$reported"
+    _log "apt version from the local apt: $_APT_VERSION"
+  else
+    _log "No local apt, using default version: $_APT_VERSION"
+  fi
+}
+
+# Resolve the release codename substituted into a profiled source path.
+# --release wins; otherwise the local system is asked. Leaving it empty is
+# not an error: it only means the sources that need one are skipped.
+_resolve_codename() {
+  if [[ -n "$_RELEASE" ]]; then
+    _log "Release codename from --release: $_RELEASE"
+    return 0
+  fi
+
+  if [[ -r /etc/os-release ]]; then
+    # Read in a subshell so the sourced file cannot clobber a global here.
+    # shellcheck source=/dev/null
+    _RELEASE=$(. /etc/os-release 2>/dev/null && echo "${VERSION_CODENAME:-}") || _RELEASE=""
+  fi
+
+  if [[ -n "$_RELEASE" ]]; then
+    _log "Release codename from /etc/os-release: $_RELEASE"
+  else
+    _log "No release codename available"
+  fi
+}
+
+_select_sources() {
+  local entry url profile pattern keep
+
+  _resolve_codename
+
+  for entry in "${_SOURCES[@]}" ${_EXTRA_SOURCES[@]+"${_EXTRA_SOURCES[@]}"}; do
+    IFS=$'\t' read -r url profile < <(_split_source "$entry")
     keep=true
 
     if [[ ${#_INCLUDE_PATTERNS[@]} -gt 0 ]]; then
@@ -380,17 +528,50 @@ _select_sources() {
       done
     fi
 
-    if [[ "$keep" == "true" ]]; then
-      _URLS+=("$url")
+    if [[ "$keep" != "true" ]]; then
+      continue
     fi
+
+    # A path that still needs a codename cannot be probed against a guessed
+    # value: a wrong codename gives a 404 that looks like a missing index.
+    if [[ "$url" == *"{codename}"* ]]; then
+      if [[ -z "$_RELEASE" ]]; then
+        _SKIPPED+=("$url")
+        continue
+      fi
+      url="${url//\{codename\}/$_RELEASE}"
+    fi
+
+    _URLS+=("${url}|${profile}")
   done
 
   if [[ ${#_URLS[@]} -eq 0 ]]; then
+    if [[ ${#_SKIPPED[@]} -gt 0 ]]; then
+      _print_color "$_RED" "ERROR: Every selected source needs a release codename"
+      _print_color "$_YELLOW" "Pass --release CODENAME, for example --release noble"
+      exit 2
+    fi
     _print_color "$_RED" "ERROR: No sources left to check after applying --include/--exclude"
     exit 2
   fi
 
   _log "Selected ${#_URLS[@]} sources to check"
+}
+
+# Report the sources left out for want of a codename. Text format only, like
+# the section headers and the summary: the record formats carry one line per
+# checked source and a skipped source was never checked.
+_print_skipped() {
+  if [[ ${#_SKIPPED[@]} -eq 0 ]] || [[ "$_OUTPUT_FORMAT" != "text" ]]; then
+    return 0
+  fi
+
+  echo
+  _print_color "$_YELLOW" "Skipped, no release codename available (pass --release CODENAME):"
+  local url
+  for url in "${_SKIPPED[@]}"; do
+    echo "  $url"
+  done
 }
 
 ###############################################################################
@@ -425,6 +606,12 @@ _record_result() {
 }
 
 # Map a curl (or timeout) exit status to a short label for the report.
+#
+# These are the labels for the case where no response arrived. A profiled
+# probe adds two more, NOINDEX and NOBODY, set in _check_single_source for a
+# response that arrived but is not usable. All of them are documented in the
+# FAILURE LABELS block of _print_help and in the README table; the three
+# lists have to stay in step.
 _curl_error_label() {
   case "$1" in
     28|124) echo "TIMEOUT" ;;
@@ -437,9 +624,34 @@ _curl_error_label() {
 }
 
 _check_single_source() {
-  local url="$1"
+  local entry="$1"
+  local url profile
 
-  _log "Checking: $url"
+  IFS=$'\t' read -r url profile < <(_split_source "$entry")
+
+  local method user_agent extra_headers ok_codes assert
+  method=$(_profile_field "$profile" method)
+  user_agent=$(_profile_field "$profile" user_agent)
+  extra_headers=$(_profile_field "$profile" headers)
+  ok_codes=$(_profile_field "$profile" ok_codes)
+  assert=$(_profile_field "$profile" assert)
+
+  # An explicit --user-agent wins over the profile, so that an operator can
+  # reproduce one fingerprint by hand. It can therefore defeat the
+  # fingerprint a profile depends on, which --help says.
+  if [[ "$_USER_AGENT_SET" == "true" ]] || [[ -z "$user_agent" ]]; then
+    user_agent="$_USER_AGENT"
+  fi
+
+  # A profile that asserts on the body needs somewhere to put it. The file
+  # lives in the per-run directory removed by the EXIT trap in _main, so a
+  # probe killed mid-transfer leaves nothing behind.
+  local body_target="/dev/null"
+  if [[ -n "$assert" ]]; then
+    body_target=$(mktemp "${_TMPDIR}/body.XXXXXX")
+  fi
+
+  _log "Checking: $url (profile: $profile)"
 
   # Measure response time
   local start_time
@@ -450,6 +662,7 @@ _check_single_source() {
   local status_code=""
   local redirect_count=0
   local final_url="$url"
+  local first_line=""
 
   while [[ $attempt -le $_RETRIES ]]; do
     if [[ $attempt -gt 1 ]]; then
@@ -463,12 +676,27 @@ _check_single_source() {
     # something is often a portal redirecting to a login or block page.
     local curl_cmd=(
       curl
-      -s -m "$_TIMEOUT" -o /dev/null
+      -s -m "$_TIMEOUT" -o "$body_target"
       -w '%{http_code}\t%{num_redirects}\t%{url_effective}'
-      -I --insecure -L --max-redirs "$_MAX_REDIRS"
-      -A "$_USER_AGENT"
+      --insecure -L --max-redirs "$_MAX_REDIRS"
+      -A "$user_agent"
       --connect-timeout 5
     )
+
+    # HEAD is the generic probe. A profile asking for anything else wants the
+    # response body, so the method is set rather than -I.
+    if [[ "$method" == "HEAD" ]]; then
+      curl_cmd+=(-I)
+    else
+      curl_cmd+=(-X "$method")
+    fi
+
+    # Headers the consuming application sends. Traffic classifiers key on
+    # these as much as on the User-Agent.
+    local header
+    while IFS= read -r header; do
+      [[ -n "$header" ]] && curl_cmd+=(-H "$header")
+    done <<<"$extra_headers"
 
     # Add proxy if set
     if [[ -n "$_PROXY_URL" ]]; then
@@ -505,17 +733,33 @@ _check_single_source() {
   end_time=$(date +%s.%N)
   response_time=$(echo "$end_time - $start_time" | bc -l 2>/dev/null || echo "N/A")
 
-  # Determine if successful. The probe is a HEAD on the root of the host, not
-  # on a repository file, so the code says little about the service and almost
-  # everything about the network path: any of these means the origin itself
-  # answered. 400, 404 and 405 are how several of the hosts below react to a
-  # HEAD on their root, and 401 and 429 come from the origin as well.
-  #
-  # 403 is deliberately left out: it is what a filtering proxy returns when it
-  # blocks a URL, which is exactly what this script exists to detect. 407 and
-  # 5xx are left out for the same reason, as they point at the proxy rather
-  # than at the origin.
-  if [[ "$status_code" =~ ^(2[0-9][0-9]|3[0-9][0-9]|400|401|404|405|429)$ ]]; then
+  # Judge the result against the profile. Which codes mean "the origin
+  # answered" depends on what was asked for: see the ok_codes comments in
+  # _profile_field.
+  local verdict="FAILED"
+  if [[ "$status_code" =~ $ok_codes ]]; then
+    verdict="OK"
+  elif [[ -n "$assert" ]] && [[ "$status_code" =~ ^4[0-9][0-9]$ ]]; then
+    # A clean client error on an index path is a wrong path or a wrong
+    # codename, not a filtered network. Saying so keeps an operator from
+    # hunting a firewall rule that does not exist.
+    status_code="NOINDEX"
+  fi
+
+  # The status code only says something answered. For a profile that knows
+  # what the answer should look like, the body is the real test: a block page
+  # served with 200, or a transfer reset partway through, both fail here.
+  if [[ "$verdict" == "OK" ]] && [[ -n "$assert" ]]; then
+    if ! IFS= read -r first_line <"$body_target" 2>/dev/null ||
+      [[ "$first_line" != "$assert"* ]]; then
+      verdict="FAILED"
+      status_code="NOBODY"
+    fi
+  fi
+
+  [[ "$body_target" != "/dev/null" ]] && rm -f "$body_target"
+
+  if [[ "$verdict" == "OK" ]]; then
     _print_status "OK" "$status_code" "$url" "$response_time" "$final_url" "$redirect_count"
     _record_result "OK" "$url" "$status_code"
     return 0
@@ -629,13 +873,23 @@ OPTIONS:
     -h, --help              Show this help message
     -v, --version           Show version information
     -V, --verbose           Enable verbose logging
-    -t, --timeout SECONDS   Set timeout for each check (default: $_TIMEOUT)
+    -t, --timeout SECONDS   Set timeout for each check (default: $_TIMEOUT).
+                            A profiled probe downloads a repository index
+                            rather than headers only, so it needs more time
+                            on a slow link
     -r, --retries COUNT     Set number of retries for failed checks (default: $_RETRIES)
     -p, --parallel          Run checks in parallel (faster but less readable)
     -f, --format FORMAT     Output format: text, json, csv, yaml (default: text)
     -l, --log FILE          Log detailed output to file
-    -u, --user-agent STRING Set custom User-Agent (default: $_USER_AGENT)
-    -s, --source URL        Add a source to check (repeatable)
+    -u, --user-agent STRING Set custom User-Agent (default: $_USER_AGENT).
+                            Applies to profiled probes too, so it can defeat
+                            the request fingerprint a profile depends on
+    -R, --release CODENAME  Release codename substituted for {codename} in a
+                            profiled source path (default: VERSION_CODENAME
+                            from /etc/os-release). Sources needing one are
+                            skipped when neither supplies it
+    -s, --source URL        Add a source to check (repeatable). Accepts
+                            URL|PROFILE to probe it as that application
     -S, --sources-file FILE Add sources from a file, one URL per line,
                             blank lines and '#' comments are ignored
     -i, --include PATTERN   Only check sources whose URL matches the
@@ -656,6 +910,8 @@ HEREDOC
   _print_example "--log /tmp/check.log http://proxy:8080" "With logging and proxy"
   _print_example "--include elastic --exclude '^http:'" "Only https Elastic sources"
   _print_example "--sources-file my-sources.txt" "Also check custom sources"
+  _print_example "--release noble" "Probe the archives as APT on noble"
+  _print_example "--source 'http://mirror/ubuntu/dists/{codename}/InRelease|apt'" "Probe a mirror as APT"
   cat <<HEREDOC
 
 EXIT CODES:
@@ -670,7 +926,22 @@ FAILURE LABELS:
     REFUSED  Connection refused or could not be established
     TLS      TLS handshake or certificate error
     REDIRS   More than $_MAX_REDIRS redirects, or a redirect loop
+    NOINDEX  Profiled probe only: the index path answered with a client
+             error, so the path or the --release codename is wrong rather
+             than the network being filtered
+    NOBODY   Profiled probe only: the response arrived but is not what the
+             application expects, such as a block page served with 200
     ERR<n>   Any other curl failure, <n> is the curl exit code
+
+PROBE PROFILES:
+    A source is probed the way the application that consumes it probes it,
+    so that a network classifying traffic by request fingerprint treats the
+    probe as it treats that application. A generic HTTP request can succeed
+    where the real application is blocked.
+
+    generic  HEAD on the host root, judged by the status code. The default
+    apt      GET of the repository index with APT's User-Agent and headers,
+             reachable only when a complete PGP signed document arrives
 
 HEREDOC
 }
@@ -740,9 +1011,19 @@ _parse_options() {
         exit 2
       fi
       ;;
+    -R | --release)
+      if [[ -n "${2:-}" ]]; then
+        _RELEASE="$2"
+        shift 2
+      else
+        _print_color "$_RED" "ERROR: --release requires a codename argument"
+        exit 2
+      fi
+      ;;
     -u | --user-agent)
       if [[ -n "${2:-}" ]]; then
         _USER_AGENT="$2"
+        _USER_AGENT_SET=true
         shift 2
       else
         _print_color "$_RED" "ERROR: --user-agent requires a string argument"
@@ -815,6 +1096,11 @@ _main() {
   # Check dependencies first
   _check_dependencies
 
+  # Scratch space for response bodies. Background probes do not inherit this
+  # trap, so the directory outlives them and is removed once here.
+  _TMPDIR=$(mktemp -d)
+  trap 'rm -rf "$_TMPDIR"' EXIT
+
   # Parse command line options
   _parse_options "$@"
 
@@ -827,6 +1113,10 @@ _main() {
   # Build the final list of sources
   _select_sources
 
+  # Resolve once here rather than per probe, so that the parallel subshells
+  # inherit the value instead of each asking the local apt for it.
+  _resolve_apt_version
+
   # Print CSV header if needed
   if [[ "$_OUTPUT_FORMAT" == "csv" ]]; then
     echo "URL,Status,Code,ResponseTime,Redirects,FinalURL"
@@ -837,6 +1127,7 @@ _main() {
   _check_protocol "https"
 
   # Print summary
+  _print_skipped
   _print_summary
 
   # Exit with appropriate code
