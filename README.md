@@ -2,7 +2,7 @@
 
 ## About
 
-The `check_sources` script is a comprehensive Bash utility that validates connectivity to Canonical package repositories and third-party resources required for infrastructure deployment. Version 2.0.0 introduced configurable options, multiple output formats, parallel execution, and enhanced error handling. Version 2.1.0 adds custom sources, URL filtering, descriptive failure labels, and color-aware output. Version 3.0.0 probes each source the way the application that consumes it does, so a reachable verdict reflects whether that application can use the source. It's particularly useful for environments where internet access may be restricted or proxied.
+The `check_sources` script is a comprehensive Bash utility that validates connectivity to Canonical package repositories and third-party resources required for infrastructure deployment. Version 2.0.0 introduced configurable options, multiple output formats, parallel execution, and enhanced error handling. Version 2.1.0 adds custom sources, URL filtering, descriptive failure labels, and color-aware output. Version 3.0.0 probes each source the way the application that consumes it does, so a reachable verdict reflects whether that application can use the source, and 3.0.1 fixes the text column alignment that change disturbed. It's particularly useful for environments where internet access may be restricted or proxied.
 
 ## Why Bash, and Why a Single File
 
@@ -43,6 +43,10 @@ The cost is accepted on purpose: a script long enough that a real language would
 - **Failure Labels**: Unreachable sources report `TIMEOUT`, `DNS`, `REFUSED`, `TLS` or `ERR<n>` instead of a bare `000`
 - **Color Aware Output**: Colors are disabled automatically when piped, when `NO_COLOR` is set, or with `--no-color`
 - **Reliable Parallel Mode**: Summary counts and exit code are correct with `--parallel`, and a failed source no longer aborts the run
+
+### Fixed in v3.0.1
+
+- **Text Column Alignment**: The URL column is sized to the widest URL in the run instead of a fixed 50 characters, so the index paths introduced in 3.0.0 no longer push the status column out of line
 
 ### What's New (v3.0.0)
 
