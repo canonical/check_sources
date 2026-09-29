@@ -106,6 +106,13 @@ declare -a _URLS=()
 # available. Reported once, and counted as neither success nor failure.
 declare -a _SKIPPED=()
 
+# Width of the URL column in text output, computed from the selected sources
+# by _select_sources. A profiled source carries an index path, so the widest
+# URL in a run is not known until the list is built. Capped so that one long
+# custom source cannot push the status off the far side of the terminal.
+declare -i _URL_WIDTH=50
+declare -i _URL_WIDTH_MAX=72
+
 # Results tracking
 declare -a _RESULTS=()
 declare -i _SUCCESS_COUNT=0
@@ -357,9 +364,9 @@ _print_status() {
     # processes print at once, and separate writes for the URL and
     # the status would interleave across lines.
     if [[ "$status" == "OK" ]]; then
-      printf "%-50s ${_GREEN}%s${_RESET}%s\n" "$url" "[$code] OK (${response_time}s)" "$redirect_note"
+      printf "%-${_URL_WIDTH}s ${_GREEN}%s${_RESET}%s\n" "$url" "[$code] OK (${response_time}s)" "$redirect_note"
     else
-      printf "%-50s ${_RED}%s${_RESET}%s\n" "$url" "[$code] FAILED" "$redirect_note"
+      printf "%-${_URL_WIDTH}s ${_RED}%s${_RESET}%s\n" "$url" "[$code] FAILED" "$redirect_note"
     fi
     ;;
   esac
@@ -554,6 +561,20 @@ _select_sources() {
     _print_color "$_RED" "ERROR: No sources left to check after applying --include/--exclude"
     exit 2
   fi
+
+  # Size the URL column to the run. Both protocol sections share it, so the
+  # whole report lines up rather than each section lining up with itself.
+  local entry_url widest=0
+  for entry in "${_URLS[@]}"; do
+    entry_url="${entry%%|*}"
+    if [[ ${#entry_url} -gt $widest ]]; then
+      widest=${#entry_url}
+    fi
+  done
+  if [[ $widest -gt $_URL_WIDTH_MAX ]]; then
+    widest=$_URL_WIDTH_MAX
+  fi
+  _URL_WIDTH=$widest
 
   _log "Selected ${#_URLS[@]} sources to check"
 }

@@ -187,6 +187,12 @@ request actually moved somewhere else.
 Only `text` prints the per-protocol section headers and the summary block; the
 machine-readable formats emit one record per source and nothing else.
 
+The `text` URL column is sized to the widest URL in the run, so both protocol
+sections line up with each other rather than each one lining up with itself. A
+profiled source carries an index path, which is longer than a host root, so the
+column is wider on a run that includes one. It is capped, so a single long
+`--source` cannot push the status column off the terminal.
+
 The `yaml` format uses a single-line flow mapping per record rather than a block
 mapping, so that records from different sources never interleave in `--parallel`
 mode. It parses to the same structure either way.
