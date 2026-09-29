@@ -74,6 +74,10 @@ _LOG_FILE=""
 _USER_AGENT="check_sources/${_VERSION}"
 _PROXY_URL=""
 
+# Shown in place of an elapsed time that could not be measured, which happens
+# when date does not support nanosecond output.
+_UNMEASURED="N/A"
+
 # Set by --user-agent. A profile supplies its own User-Agent, so the override
 # has to be distinguishable from the default rather than merely non-empty.
 _USER_AGENT_SET=false
@@ -327,11 +331,41 @@ _validate_proxy() {
 # Output Functions
 ###############################################################################
 
+# Render elapsed nanoseconds as seconds. Both renderers divide integers and put
+# the decimal point in the format string, so neither is affected by the locale's
+# decimal separator the way a %f conversion would be. Anything that is not a
+# number, which is the unmeasured marker, passes through untouched.
+
+# Full precision, for the machine-readable formats.
+_format_elapsed_full() {
+  local ns="$1"
+
+  if [[ ! "$ns" =~ ^[0-9]+$ ]]; then
+    echo "$ns"
+    return 0
+  fi
+
+  printf '%d.%09d\n' $((ns / 1000000000)) $((ns % 1000000000))
+}
+
+# Three decimals, for the text report. Millisecond resolution is the useful
+# granularity here, and a fixed width keeps the field after it in one column.
+_format_elapsed_short() {
+  local ns="$1"
+
+  if [[ ! "$ns" =~ ^[0-9]+$ ]]; then
+    echo "$ns"
+    return 0
+  fi
+
+  printf '%d.%03d\n' $((ns / 1000000000)) $(((ns / 1000000) % 1000))
+}
+
 _print_status() {
   local status="$1"
   local code="$2"
   local url="$3"
-  local response_time="${4:-N/A}"
+  local elapsed_ns="${4:-$_UNMEASURED}"
   local final_url="${5:-$url}"
   local redirect_count="${6:-0}"
 
@@ -341,6 +375,22 @@ _print_status() {
   local redirect_note=""
   if [[ "$redirect_count" -gt 0 ]] && [[ "$final_url" != "$url" ]]; then
     redirect_note=" -> $final_url"
+  fi
+
+  # One measurement, two renderings: the records keep the precision a consumer
+  # may want, the report keeps a width a reader can scan.
+  local response_time
+  if [[ "$_OUTPUT_FORMAT" == "text" ]]; then
+    response_time=$(_format_elapsed_short "$elapsed_ns")
+  else
+    response_time=$(_format_elapsed_full "$elapsed_ns")
+  fi
+
+  # The text report writes the time as "(1.234s)". An unmeasured marker takes
+  # no unit, or the line would read "(N/As)".
+  local time_note="(${response_time}s)"
+  if [[ "$response_time" == "$_UNMEASURED" ]]; then
+    time_note="($response_time)"
   fi
 
   case "$_OUTPUT_FORMAT" in
@@ -364,7 +414,7 @@ _print_status() {
     # processes print at once, and separate writes for the URL and
     # the status would interleave across lines.
     if [[ "$status" == "OK" ]]; then
-      printf "%-${_URL_WIDTH}s ${_GREEN}%s${_RESET}%s\n" "$url" "[$code] OK (${response_time}s)" "$redirect_note"
+      printf "%-${_URL_WIDTH}s ${_GREEN}%s${_RESET}%s\n" "$url" "[$code] OK $time_note" "$redirect_note"
     else
       printf "%-${_URL_WIDTH}s ${_RED}%s${_RESET}%s\n" "$url" "[$code] FAILED" "$redirect_note"
     fi
@@ -676,7 +726,7 @@ _check_single_source() {
 
   # Measure response time
   local start_time
-  start_time=$(date +%s.%N)
+  start_time=$(date +%s%N)
 
   # Perform the check with retries
   local attempt=1
@@ -750,9 +800,17 @@ _check_single_source() {
     ((attempt++))
   done
 
-  local end_time response_time
-  end_time=$(date +%s.%N)
-  response_time=$(echo "$end_time - $start_time" | bc -l 2>/dev/null || echo "N/A")
+  # Elapsed time as integer nanoseconds. date returns them directly with %s%N,
+  # so the subtraction is Bash arithmetic and needs no float tool. Both stamps
+  # are checked first: a BusyBox date ignores %N and returns the literal
+  # characters, which would make the arithmetic fail under errexit.
+  local end_time elapsed_ns
+  end_time=$(date +%s%N)
+  if [[ "$start_time" =~ ^[0-9]+$ ]] && [[ "$end_time" =~ ^[0-9]+$ ]]; then
+    elapsed_ns=$((end_time - start_time))
+  else
+    elapsed_ns="$_UNMEASURED"
+  fi
 
   # Judge the result against the profile. Which codes mean "the origin
   # answered" depends on what was asked for: see the ok_codes comments in
@@ -781,11 +839,11 @@ _check_single_source() {
   [[ "$body_target" != "/dev/null" ]] && rm -f "$body_target"
 
   if [[ "$verdict" == "OK" ]]; then
-    _print_status "OK" "$status_code" "$url" "$response_time" "$final_url" "$redirect_count"
+    _print_status "OK" "$status_code" "$url" "$elapsed_ns" "$final_url" "$redirect_count"
     _record_result "OK" "$url" "$status_code"
     return 0
   else
-    _print_status "FAILED" "$status_code" "$url" "$response_time" "$final_url" "$redirect_count"
+    _print_status "FAILED" "$status_code" "$url" "$elapsed_ns" "$final_url" "$redirect_count"
     _record_result "FAILED" "$url" "$status_code"
     return 1
   fi

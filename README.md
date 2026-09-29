@@ -8,7 +8,7 @@ The `check_sources` script is a comprehensive Bash utility that validates connec
 
 The script runs at the moment when connectivity is still an open question, and that constraint rules out most of the alternatives.
 
-**The runtime has to be there already.** Installing a Python package, a Go toolchain or any library would depend on the very network access the script is meant to measure. A stock Ubuntu image ships Bash, `curl` and coreutils, so the only hard requirements are `curl` and `timeout`, both already present. `bc` is optional and degrades to `N/A`.
+**The runtime has to be there already.** Installing a Python package, a Go toolchain or any library would depend on the very network access the script is meant to measure. A stock Ubuntu image ships Bash, `curl` and coreutils, so the only hard requirements are `curl` and `timeout`, both already present. Elapsed times are computed in Bash arithmetic from `date`, so there is no optional math dependency either.
 
 **Getting it onto the machine has to be trivial.** One executable file can be copied with `scp`, pasted into a console session, or dropped in by cloud-init, then run with `chmod +x`. There is no clone, no build step, no install target, and nothing to uninstall afterwards.
 
@@ -175,12 +175,17 @@ Colored output is used only when standard output is a terminal. It is turned off
 
 ### Output Formats
 
-| Format | Structure                                | Headers and summary | Example line                                                          |
-|--------|------------------------------------------|---------------------|-----------------------------------------------------------------------|
-| `text` | Aligned columns, colored when on a tty   | Yes                 | `http://jaas.ai       [200] OK (1.55s) -> https://canonical.com/jaas` |
-| `json` | One JSON object per line                 | No                  | `{"url":"http://jaas.ai","status":"OK","code":"200",...}`             |
-| `csv`  | Header row, then one quoted row per line | No                  | `"http://jaas.ai","OK","200","1.55","1","https://canonical.com/jaas"` |
-| `yaml` | One list item per line                   | No                  | `- {url: "http://jaas.ai", status: "OK", code: "200", ...}`           |
+| Format | Structure                                | Headers and summary | Example line                                                       |
+|--------|------------------------------------------|---------------------|--------------------------------------------------------------------|
+| `text` | Aligned columns, colored when on a tty   | Yes                 | `http://jaas.ai   [200] OK (1.547s) -> https://canonical.com/jaas` |
+| `json` | One JSON object per line                 | No                  | `{"url":"http://jaas.ai","status":"OK","code":"200",...}`          |
+| `csv`  | Header row, then one quoted row per line | No                  | `"http://jaas.ai","OK","200","1.547077312","1",...`                |
+| `yaml` | One list item per line                   | No                  | `- {url: "http://jaas.ai", status: "OK", code: "200", ...}`        |
+
+The elapsed time is measured in nanoseconds and rendered differently per format:
+`text` rounds it to three decimals so the column has a fixed width, while `json`,
+`csv` and `yaml` carry the full nanosecond precision. Both forms are written with a
+leading zero, so a sub-second time reads `0.505` rather than `.505`.
 
 Every record carries six fields: the requested URL, the status, the code, the
 response time, how many redirects were followed, and the URL the request ended
@@ -204,8 +209,7 @@ mode. It parses to the same structure either way.
 ## Dependencies
 
 - `curl` - for HTTP/HTTPS connectivity testing
-- `timeout` and `mktemp` (coreutils) - for request timeout management and parallel mode
-- `bc` - for response time calculations (optional, falls back to "N/A")
+- `timeout`, `mktemp` and `date` (coreutils) - for request timeouts, parallel mode, and elapsed time
 - Bash 4.0+ shell environment
 
 ## Tested Services
