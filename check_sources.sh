@@ -53,7 +53,7 @@ IFS=$'\n\t'
 _ME=$(basename "${0}")
 
 # Version
-_VERSION="3.0.1"
+_VERSION="3.1.0"
 
 # Colors. Cleared by _disable_colors when the output is not a terminal, when
 # the NO_COLOR environment variable is set, or when --no-color is given.
