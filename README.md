@@ -130,13 +130,22 @@ Colored output is used only when standard output is a terminal. It is turned off
 -h, --help              Show help message and usage examples
 -v, --version           Display version information  
 -V, --verbose           Enable verbose logging with timestamps
--t, --timeout SECONDS   Set timeout for each check (default: 10)
+-t, --timeout SECONDS   Set timeout for each check (default: 10). A profiled
+                        probe downloads a repository index rather than headers
+                        only, so it needs more time on a slow link
 -r, --retries COUNT     Set number of retries for failed checks (default: 2)
 -p, --parallel          Run checks in parallel (faster execution)
 -f, --format FORMAT     Output format: text, json, csv, yaml (default: text)  
 -l, --log FILE          Log detailed output to specified file
--u, --user-agent STRING Set custom User-Agent header
--s, --source URL        Add a source to check (repeatable)
+-u, --user-agent STRING Set custom User-Agent header. Applies to profiled
+                        probes too, so it can defeat the request fingerprint
+                        a profile depends on
+-R, --release CODENAME  Release codename substituted for {codename} in a
+                        profiled source path (default: VERSION_CODENAME from
+                        /etc/os-release). Sources needing one are skipped when
+                        neither supplies it
+-s, --source URL        Add a source to check (repeatable). Accepts
+                        URL|PROFILE to probe it as that application
 -S, --sources-file FILE Add sources from a file, one URL per line
 -i, --include PATTERN   Only check sources whose URL matches the pattern (repeatable)
 -x, --exclude PATTERN   Skip sources whose URL matches the pattern (repeatable)
@@ -229,7 +238,7 @@ Run `./check_sources.sh --format csv` to get the exact list of URLs checked, inc
 - **1**: Some sources failed connectivity tests or errors occurred during execution  
 - **2**: Invalid command-line arguments, unreadable sources file, invalid pattern, no sources left after filtering, or missing required dependencies
 
-The script considers 2xx, 3xx, 400, 401, 404, 405, and 429 HTTP status codes as successful connectivity indicators. The probe is a `HEAD` on the root of the host rather than on a repository file, so the code says little about the service and almost everything about the network path: each of these means the origin answered.
+For a source on the default `generic` profile, the script considers 2xx, 3xx, 400, 401, 404, 405, and 429 HTTP status codes as successful connectivity indicators. That probe is a `HEAD` on the root of the host rather than on a repository file, so the code says little about the service and almost everything about the network path: each of these means the origin answered. A source on another profile is judged by that profile's rule instead, described under [Probe Profiles](#probe-profiles).
 
 `403` is deliberately not on the list, because it is what a filtering proxy returns when it blocks a URL, which is one of the conditions this script exists to detect. `407` and `5xx` are excluded for the same reason: they point at the proxy rather than at the origin.
 
@@ -242,18 +251,79 @@ Two consequences are worth keeping in mind:
 - Several of the built-in sources redirect the root path to a completely different host, for example `http://ppa.launchpad.net` to `https://launchpad.net/` and `http://artifacts.elastic.co` to `https://www.elastic.co/downloads/`. The verdict for those sources therefore reflects the destination host, not the one that was asked for. The destination is always reported, so the report can be audited.
 - A `3xx` still counts as a success when it survives as the final code, which now only happens for a redirect without a usable `Location` header.
 
+## Probe Profiles
+
+A generic HTTP request reaching a host does not prove that the application which
+will consume that host can reach it. On a network with application-aware policy,
+traffic is classified by request fingerprint, so `curl` can succeed on exactly the
+URL where `apt update` is reset. A probe profile makes the check send the request
+the consuming application sends, and judge the answer the way that application
+would.
+
+| Profile   | Request                                                          | Counts as reachable when                                |
+|-----------|------------------------------------------------------------------|---------------------------------------------------------|
+| `generic` | `HEAD` on the host root, with the script's own User-Agent        | The status code is 2xx, 3xx, 400, 401, 404, 405, or 429 |
+| `apt`     | `GET` of the repository index, with APT's User-Agent and headers | A complete PGP signed document arrives                  |
+
+`generic` is the default, so a source declared as a bare URL behaves exactly as it
+did before profiles existed.
+
+The `apt` profile sends the User-Agent `Debian APT-HTTP/1.3 (<version>)`, which is
+the literal string apt puts on the wire. `Debian` is part of it because Ubuntu ships
+apt with the identifier its upstream compiles in, so that is what a traffic
+classifier sees coming from an Ubuntu host. It is not a reference to another
+distribution, and changing it would defeat the profile: a User-Agent no real apt
+sends is classified as ordinary web traffic, which is the false positive this
+profile exists to remove.
+
+The version is read from the local apt, so the probe matches the apt that will
+consume the source. A host without apt, such as a jump box that is not Ubuntu,
+falls back to a built-in version.
+
+The body check is the part that matters most. A filtering proxy that answers a
+probe with a block page and a 200, or one that resets the connection partway
+through the response, both pass a status-code check and both fail here.
+
+### Declaring a profile
+
+Append `|PROFILE` to a source. This works in the built-in list, in `--source`, and
+in a `--sources-file`:
+
+```bash
+./check_sources.sh --source 'http://mirror.internal/ubuntu/dists/{codename}/InRelease|apt'
+```
+
+A profiled source carries its own path, because archive layouts differ. `{codename}`
+in that path is replaced with the release codename, taken from `--release` when
+given and otherwise from `VERSION_CODENAME` in `/etc/os-release`. When neither
+supplies one, those sources are skipped and listed at the end of the run rather
+than probed against a guessed value; skipped sources count as neither reachable nor
+unreachable.
+
+Two caveats. `--user-agent` overrides the User-Agent for every probe, including a
+profiled one, so it can defeat the fingerprint the profile depends on. And a
+profiled probe downloads a repository index of a few hundred KB rather than headers
+only, so `--timeout` may need raising on a slow link.
+
+The built-in archive hosts use the `apt` profile. `ubuntu-cloud.archive.canonical.com`
+does not: its index path needs an OpenStack release segment as well as a codename,
+so there is no repository-wide path to probe. The PPA hosts are generic for the same
+reason, since a PPA index path needs an owner and an archive name.
+
 ## Failure Labels
 
-When a source returns no usable HTTP response, the code column shows a short label derived from the curl exit status instead of an HTTP code. The same label appears in the text, JSON, CSV, and YAML output and in the failed sources list of the summary.
+When a source returns no usable HTTP response, the code column shows a short label derived from the curl exit status instead of an HTTP code. `NOINDEX` and `NOBODY` are the exception: they mark a response that did arrive but is not usable. The same label appears in the text, JSON, CSV, and YAML output and in the failed sources list of the summary.
 
-| Label     | Meaning                                                   | curl exit code            |
-|-----------|-----------------------------------------------------------|---------------------------|
-| `TIMEOUT` | No response within the configured timeout                 | 28, or 124 from `timeout` |
-| `DNS`     | Hostname could not be resolved                            | 6                         |
-| `REFUSED` | Connection refused or could not be established            | 7                         |
-| `TLS`     | TLS handshake or certificate error                        | 35, 60                    |
-| `REDIRS`  | More than 10 redirects, or a redirect loop                | 47                        |
-| `ERR<n>`  | Any other curl failure, where `<n>` is the curl exit code | other                     |
+| Label     | Meaning                                                    | curl exit code            |
+|-----------|------------------------------------------------------------|---------------------------|
+| `TIMEOUT` | No response within the configured timeout                  | 28, or 124 from `timeout` |
+| `DNS`     | Hostname could not be resolved                             | 6                         |
+| `REFUSED` | Connection refused or could not be established             | 7                         |
+| `TLS`     | TLS handshake or certificate error                         | 35, 60                    |
+| `REDIRS`  | More than 10 redirects, or a redirect loop                 | 47                        |
+| `NOINDEX` | Profiled probe: client error on the index path             | none, a response arrived  |
+| `NOBODY`  | Profiled probe: response is not what the application wants | none, a response arrived  |
+| `ERR<n>`  | Any other curl failure, where `<n>` is the curl exit code  | other                     |
 
 Example:
 
