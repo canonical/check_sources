@@ -164,6 +164,9 @@ Colored output is used only when standard output is a terminal. It is turned off
                         only, so it needs more time on a slow link
 -r, --retries COUNT     Set number of retries for failed checks (default: 2)
 -p, --parallel          Run checks in parallel (faster execution)
+    --oci               Also check the Canonical container registries with a
+                        manifest fetch plus a ranged blob GET. Off by default;
+                        costs more requests per source than the other profiles
 -f, --format FORMAT     Output format: text, json, csv, yaml (default: text)  
 -l, --log FILE          Log detailed output to specified file
 -u, --user-agent STRING Set custom User-Agent header. Applies to profiled
@@ -299,13 +302,24 @@ URL where `apt update` is reset. A probe profile makes the check send the reques
 the consuming application sends, and judge the answer the way that application
 would.
 
-| Profile   | Request                                                          | Counts as reachable when                                |
-|-----------|------------------------------------------------------------------|---------------------------------------------------------|
-| `generic` | `HEAD` on the host root, with the script's own User-Agent        | The status code is 2xx, 3xx, 400, 401, 404, 405, or 429 |
-| `apt`     | `GET` of the repository index, with APT's User-Agent and headers | A complete PGP signed document arrives                  |
+| Profile   | Request                                                                    | Counts as reachable when                                |
+|-----------|----------------------------------------------------------------------------|---------------------------------------------------------|
+| `generic` | `HEAD` on the host root, with the script's own User-Agent                  | The status code is 2xx, 3xx, 400, 401, 404, 405, or 429 |
+| `apt`     | `GET` of the repository index, with APT's User-Agent and headers           | A complete PGP signed document arrives                  |
+| `oci`     | Manifest fetch with an anonymous pull token, then a ranged `GET` on a blob | Bytes of the blob actually arrive (200 or 206)          |
 
 `generic` is the default, so a source declared as a bare URL behaves exactly as it
 did before profiles existed.
+
+`oci` is not available to `--source`. It needs a registry, a repository and a tag,
+which the `url|profile` syntax cannot express, so it runs only with `--oci` against
+a built-in list of Canonical registries: Canonical's Ubuntu image on ECR Public and
+the `ubuntu/*` namespace on the Docker registry. Both demand an anonymous pull
+token, which the probe requests from the realm named in their auth challenge.
+
+The blob request is a ranged `GET` of the first 64 KiB rather than a whole layer, so
+it crosses the registry, CDN and storage path a real image pull takes without the
+cost of one. It only covers the CDN edge this run's source address was routed to.
 
 The `apt` profile sends the User-Agent `Debian APT-HTTP/1.3 (<version>)`, which is
 the literal string apt puts on the wire. `Debian` is part of it because Ubuntu ships
@@ -353,16 +367,21 @@ reason, since a PPA index path needs an owner and an archive name.
 
 When a source returns no usable HTTP response, the code column shows a short label derived from the curl exit status instead of an HTTP code. `NOINDEX` and `NOBODY` are the exception: they mark a response that did arrive but is not usable. The same label appears in the text, JSON, CSV, and YAML output and in the failed sources list of the summary.
 
-| Label     | Meaning                                                    | curl exit code            |
-|-----------|------------------------------------------------------------|---------------------------|
-| `TIMEOUT` | No response within the configured timeout                  | 28, or 124 from `timeout` |
-| `DNS`     | Hostname could not be resolved                             | 6                         |
-| `REFUSED` | Connection refused or could not be established             | 7                         |
-| `TLS`     | TLS handshake or certificate error                         | 35, 60                    |
-| `REDIRS`  | More than 10 redirects, or a redirect loop                 | 47                        |
-| `NOINDEX` | Profiled probe: client error on the index path             | none, a response arrived  |
-| `NOBODY`  | Profiled probe: response is not what the application wants | none, a response arrived  |
-| `ERR<n>`  | Any other curl failure, where `<n>` is the curl exit code  | other                     |
+| Label         | Meaning                                                     | curl exit code            |
+|---------------|-------------------------------------------------------------|---------------------------|
+| `TIMEOUT`     | No response within the configured timeout                   | 28, or 124 from `timeout` |
+| `DNS`         | Hostname could not be resolved                              | 6                         |
+| `REFUSED`     | Connection refused or could not be established              | 7                         |
+| `TLS`         | TLS handshake or certificate error                          | 35, 60                    |
+| `REDIRS`      | More than 10 redirects, or a redirect loop                  | 47                        |
+| `NOINDEX`     | Profiled probe: client error on the index path              | none, a response arrived  |
+| `NOBODY`      | Profiled probe: response is not what the application wants  | none, a response arrived  |
+| `MANIFEST<n>` | `--oci`: registry answered the manifest with status `<n>`   | none, a response arrived  |
+| `NOAUTH`      | `--oci`: auth demanded but no usable realm in the challenge | none, a response arrived  |
+| `NOTOKEN`     | `--oci`: the token endpoint returned no usable token        | none, a response arrived  |
+| `NOMANIFEST`  | `--oci`: manifest arrived with no parseable blob digest     | none, a response arrived  |
+| `RESET`       | `--oci`: blob request returned no bytes                     | none, a response arrived  |
+| `ERR<n>`      | Any other curl failure, where `<n>` is the curl exit code   | other                     |
 
 Example:
 
