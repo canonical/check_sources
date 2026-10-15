@@ -68,10 +68,6 @@ _TIMEOUT=10
 _RETRIES=2
 _PARALLEL=false
 _VERBOSE=false
-# Off by default: the oci profile does two or three requests per registry
-# and needs curl built with range-request support, more than a plain
-# deployment doing only apt/package checks needs. --oci opts in.
-_CHECK_OCI=false
 _OUTPUT_FORMAT="text"
 _MAX_REDIRS=10
 _LOG_FILE=""
@@ -149,11 +145,11 @@ _RESULT_FILE=""
 # These are the profiles _profile_field knows, which is what _add_source
 # actually validates against, so the two can never disagree.
 #
-# The OCI registry checks are deliberately not a profile here: they need a
-# registry, a repository and a tag, which the "url|profile" syntax cannot
-# express, and they run through _check_oci_source rather than the
-# curl-once probe. They are reached with --oci, against the built-in list.
-readonly _PROFILES="generic apt"
+# "oci" is in the list but carries no rows in _profile_field: its probe is a
+# sequence of requests, not one curl invocation, so it is dispatched by name
+# in _check_single_source instead. The name list is what _add_source
+# validates against, which is what lets such a profile exist.
+readonly _PROFILES="generic apt oci"
 
 _profile_field() {
   local profile="$1"
@@ -191,20 +187,38 @@ _profile_field() {
   esac
 }
 
-# Registries covered by the "oci" profile, one "registry|repository|tag"
-# entry per line. The repository is a small, always-present image so the
-# blob is tiny and the check has no real pull cost; it still crosses the
-# same CDN path a real deployment's image pulls would.
+# Decompose an OCI reference URL into registry, repository and tag, printed
+# tab separated. The reference is the standard form an operator already
+# types, "scheme://registry/repository:tag", which keeps an OCI source inside
+# the two-field "url|profile" grammar instead of needing a third field.
 #
-# Both Canonical registries answer an unauthenticated manifest request with
-# 401 and a WWW-Authenticate challenge, so both go through the anonymous
-# pull-token step below. Their scopes differ, ECR asks for "aws" where the
-# Docker registry asks for "repository:<repo>:pull", which is why the scope
-# is taken from the challenge rather than built here.
-readonly _OCI_SOURCES=(
-  "https://public.ecr.aws|ubuntu/ubuntu|24.04"
-  "https://registry-1.docker.io|ubuntu/nginx|latest"
-)
+# The registry is everything up to the third slash, the tag is what follows
+# the last colon in the remainder, and the repository is what is left, so a
+# nested path keeps all of its segments. Returns non-zero when the reference
+# carries no tag, which _add_source turns into an invalid-argument exit.
+_split_oci_ref() {
+  local url="$1"
+  local scheme rest registry repository tag
+
+  scheme="${url%%://*}"
+  rest="${url#*://}"
+  registry="${rest%%/*}"
+  rest="${rest#*/}"
+
+  # No path at all, or no tag on it.
+  if [[ "$rest" == "$registry" ]] || [[ "$rest" != *:* ]]; then
+    return 1
+  fi
+
+  tag="${rest##*:}"
+  repository="${rest%:*}"
+
+  if [[ -z "$repository" ]] || [[ -z "$tag" ]]; then
+    return 1
+  fi
+
+  printf '%s\t%s\t%s\n' "${scheme}://${registry}" "$repository" "$tag"
+}
 
 # Split a "url|profile" entry. Prints the URL and the profile separated by a
 # tab; an entry without a '|' resolves to the generic profile.
@@ -281,6 +295,11 @@ readonly _SOURCES=(
   http://packages.elasticsearch.org
   https://packages.elasticsearch.org
   https://registry.jujucharms.com
+  # Container registries. Written as OCI references so they stay inside the
+  # "url|profile" grammar: the oci profile takes the registry, repository
+  # and tag apart again.
+  "https://public.ecr.aws/ubuntu/ubuntu:24.04|oci"
+  "https://registry-1.docker.io/ubuntu/nginx:latest|oci"
 )
 
 ###############################################################################
@@ -495,9 +514,21 @@ _add_source() {
     exit 2
   fi
 
-  if ! _profile_field "$profile" method >/dev/null 2>&1; then
+  # Validate against the name list rather than _profile_field, because a
+  # profile may carry its own code path instead of field rows. _PROFILES is
+  # the single answer to "is this a profile", and the dispatch in
+  # _check_single_source is the single answer to "what does it do".
+  if [[ " $_PROFILES " != *" $profile "* ]]; then
     _print_color "$_RED" "ERROR: Unknown probe profile in $origin: $profile"
     _print_color "$_YELLOW" "Expected one of: $_PROFILES"
+    exit 2
+  fi
+
+  # An oci source has to name a tag, or there is nothing to resolve. Caught
+  # here so it fails like every other bad argument, before any probe runs.
+  if [[ "$profile" == "oci" ]] && ! _split_oci_ref "$url" >/dev/null; then
+    _print_color "$_RED" "ERROR: Invalid OCI reference in $origin: $url"
+    _print_color "$_YELLOW" "Expected format: scheme://registry/repository:tag"
     exit 2
   fi
 
@@ -590,7 +621,6 @@ _resolve_codename() {
 
 _select_sources() {
   local entry url profile pattern keep
-  local _oci_reg _oci_repo _oci_tag
 
   _resolve_codename
 
@@ -634,10 +664,7 @@ _select_sources() {
     _URLS+=("${url}|${profile}")
   done
 
-  # An empty selection is only fatal when there is nothing else to run: with
-  # --oci, --include/--exclude having filtered out every http(s) source
-  # still leaves the OCI registry checks to do.
-  if [[ ${#_URLS[@]} -eq 0 ]] && [[ "$_CHECK_OCI" != "true" ]]; then
+  if [[ ${#_URLS[@]} -eq 0 ]]; then
     if [[ ${#_SKIPPED[@]} -gt 0 ]]; then
       _print_color "$_RED" "ERROR: Every selected source needs a release codename"
       _print_color "$_YELLOW" "Pass --release CODENAME, for example --release noble"
@@ -657,18 +684,6 @@ _select_sources() {
     fi
   done
 
-  # The OCI section prints into the same column, so its labels have to be
-  # measured here too or that section alone would run past the width.
-  if [[ "$_CHECK_OCI" == "true" ]]; then
-    local oci_entry oci_label
-    for oci_entry in "${_OCI_SOURCES[@]}"; do
-      IFS='|' read -r _oci_reg _oci_repo _oci_tag <<<"$oci_entry"
-      oci_label="${_oci_reg}/${_oci_repo}:${_oci_tag}"
-      if [[ ${#oci_label} -gt $widest ]]; then
-        widest=${#oci_label}
-      fi
-    done
-  fi
   if [[ $widest -gt $_URL_WIDTH_MAX ]]; then
     widest=$_URL_WIDTH_MAX
   fi
@@ -748,8 +763,24 @@ _check_single_source() {
 
   IFS=$'\t' read -r url profile < <(_split_source "$entry")
 
+  # A profile with its own code path is dispatched here, at the one point
+  # that already has a single source and knows its profile. Routing earlier
+  # would mean splitting the URL list and running two loops, and would take
+  # parallel mode, the result file and the retry loop with it.
+  if [[ "$profile" == "oci" ]]; then
+    local oci_registry oci_repository oci_tag
+    IFS=$'\t' read -r oci_registry oci_repository oci_tag < <(_split_oci_ref "$url")
+    _check_oci_source "$oci_registry" "$oci_repository" "$oci_tag" "$url"
+    return $?
+  fi
+
   local method user_agent extra_headers ok_codes assert
-  method=$(_profile_field "$profile" method)
+  if ! method=$(_profile_field "$profile" method); then
+    # A name in _PROFILES with neither field rows nor a branch above would
+    # otherwise probe nothing and report success. Fail loudly instead.
+    _print_color "$_RED" "ERROR: Profile has no probe definition: $profile"
+    exit 2
+  fi
   user_agent=$(_profile_field "$profile" user_agent)
   extra_headers=$(_profile_field "$profile" headers)
   ok_codes=$(_profile_field "$profile" ok_codes)
@@ -945,11 +976,11 @@ _oci_resolve_blob() {
     # the subshell this runs in. That is invisible here, because a process
     # substitution is not a tested context, so the caller just sees no
     # output. Collect everything and trim in the shell instead.
-    www_auth=$(grep -i '^www-authenticate:' "$headers_file" | tr -d '\r')
+    www_auth=$(grep -i '^www-authenticate:' "$headers_file" | tr -d '\r') || www_auth=""
     www_auth=${www_auth%%$'\n'*}
-    realm=$(echo "$www_auth" | grep -oP 'realm="\K[^"]+')
-    service=$(echo "$www_auth" | grep -oP 'service="\K[^"]+')
-    scope=$(echo "$www_auth" | grep -oP 'scope="\K[^"]+')
+    realm=$(echo "$www_auth" | grep -oP 'realm="\K[^"]+') || realm=""
+    service=$(echo "$www_auth" | grep -oP 'service="\K[^"]+') || service=""
+    scope=$(echo "$www_auth" | grep -oP 'scope="\K[^"]+') || scope=""
 
     if [[ -z "$realm" ]]; then
       echo "||NOAUTH"
@@ -962,7 +993,7 @@ _oci_resolve_blob() {
     pull_token=$(curl -s -m "$_TIMEOUT" --connect-timeout 5 \
       -A "$_USER_AGENT" \
       "${realm}?service=${service}&scope=${scope}" 2>/dev/null |
-      grep -oP '"(token|access_token)"\s*:\s*"\K[^"]+')
+      grep -oP '"(token|access_token)"\s*:\s*"\K[^"]+') || pull_token=""
     pull_token=${pull_token%%$'\n'*}
 
     if [[ -z "$pull_token" ]]; then
@@ -976,6 +1007,14 @@ _oci_resolve_blob() {
       echo "||$(_curl_error_label "$retry_exit")"
       return 1
     }
+  fi
+
+  # A rate limit is not a blocked path. These registries throttle anonymous
+  # pulls, and probes run concurrently, so saying so by name keeps an
+  # operator from hunting a firewall rule that does not exist.
+  if [[ "$status_code" == "429" ]]; then
+    echo "||RATELIMIT"
+    return 1
   fi
 
   if [[ ! "$status_code" =~ ^2[0-9][0-9]$ ]]; then
@@ -995,9 +1034,13 @@ _oci_resolve_blob() {
   # its platform, so the digest held when architecture amd64 appears is that
   # entry's. Attestation entries report architecture "unknown" and are
   # skipped by the same test.
+  # Every grep below is guarded: a no-match exits 1, pipefail turns that into
+  # a failed assignment, and this function runs inside a process
+  # substitution, which is not a tested context, so errexit would kill it
+  # here and the caller would see no output at all rather than a label.
   local digest size
   digest=$(grep -oE '"(digest|architecture)"[[:space:]]*:[[:space:]]*"[^"]*"' "$body_file" |
-    awk -F'"' '$2 == "digest" { d = $4 } $2 == "architecture" && $4 == "amd64" { print d; exit }')
+    awk -F'"' '$2 == "digest" { d = $4 } $2 == "architecture" && $4 == "amd64" { print d; exit }') || digest=""
 
   if [[ -n "$digest" ]]; then
     # That digest names a manifest, not a blob yet: fetch it (same auth,
@@ -1013,8 +1056,8 @@ _oci_resolve_blob() {
   # application layer rather than a thin metadata one) in whichever
   # manifest body is now on disk, single-arch either from the start or
   # after the hop above.
-  digest=$(grep -oP '"digest"\s*:\s*"\K[^"]+' "$body_file" | tail -1)
-  size=$(grep -oP '"size"\s*:\s*\K[0-9]+' "$body_file" | tail -1)
+  digest=$(grep -oP '"digest"\s*:\s*"\K[^"]+' "$body_file" | tail -1) || digest=""
+  size=$(grep -oP '"size"\s*:\s*\K[0-9]+' "$body_file" | tail -1) || size=""
 
   if [[ -z "$digest" ]]; then
     echo "||NOMANIFEST"
@@ -1032,11 +1075,11 @@ _oci_resolve_blob() {
 # failure the oci profile exists for: a reset partway through a blob
 # transfer, which a HEAD or a manifest-only GET never triggers.
 _check_oci_source() {
-  local entry="$1"
-  local registry repository tag
-  IFS='|' read -r registry repository tag <<<"$entry"
+  local registry="$1" repository="$2" tag="$3"
+  # The source URL as declared, which is already the reference these three
+  # were taken from, so the report shows what an operator would retype.
+  local label="$4"
 
-  local label="${registry}/${repository}:${tag}"
   _log "Checking: $label (profile: oci)"
 
   local start_time end_time elapsed_ns
@@ -1095,21 +1138,13 @@ _check_oci_source() {
     return 0
   else
     local fail_code="${status_code:-RESET}"
+    if [[ "$status_code" == "429" ]]; then
+      fail_code="RATELIMIT"
+    fi
     _print_status "FAILED" "$fail_code" "$label" "$elapsed_ns" "$blob_url" 0
     _record_result "FAILED" "$label" "$fail_code"
     return 1
   fi
-}
-
-_check_oci_sources() {
-  # Sequential only: each entry already does two or three requests, and
-  # the registries involved rate-limit anonymous pulls aggressively enough
-  # that running them in parallel risks a 429 that looks like a firewall
-  # block but is not.
-  local entry
-  for entry in "${_OCI_SOURCES[@]}"; do
-    _check_oci_source "$entry" || true
-  done
 }
 
 _check_sources_parallel() {
@@ -1123,7 +1158,13 @@ _check_sources_parallel() {
   _RESULT_FILE=$(mktemp)
 
   for url in "${urls[@]}"; do
-    _check_single_source "$url" &
+    # The "|| true" matters as much here as in the sequential path, and for
+    # a second reason. A failed check returns 1, which must not abort the
+    # run; but a bare "&" also leaves errexit armed inside the background
+    # subshell, where nothing tests it. Any non-zero in the middle of a
+    # probe then kills that subshell before it reports, and the source
+    # vanishes from the output instead of being reported as failed.
+    { _check_single_source "$url" || true; } &
     pids+=($!)
   done
 
@@ -1221,11 +1262,6 @@ OPTIONS:
                             on a slow link
     -r, --retries COUNT     Set number of retries for failed checks (default: $_RETRIES)
     -p, --parallel          Run checks in parallel (faster but less readable)
-        --oci               Also check Canonical container registries with a
-                            manifest fetch plus a ranged blob GET, catching a
-                            CDN path that only breaks mid transfer. Off by
-                            default; costs more requests per source than the
-                            other profiles
     -f, --format FORMAT     Output format: text, json, csv, yaml (default: text)
     -l, --log FILE          Log detailed output to file
     -u, --user-agent STRING Set custom User-Agent (default: $_USER_AGENT).
@@ -1254,7 +1290,6 @@ HEREDOC
   _print_example "" "Basic check"
   _print_example "--verbose --timeout 15" "Verbose with longer timeout"
   _print_example "--parallel --format json" "Parallel execution with JSON output"
-  _print_example "--oci" "Also probe the Canonical container registries"
   _print_example "--log /tmp/check.log http://proxy:8080" "With logging and proxy"
   _print_example "--include elastic --exclude '^http:'" "Only https Elastic sources"
   _print_example "--sources-file my-sources.txt" "Also check custom sources"
@@ -1281,13 +1316,16 @@ FAILURE LABELS:
              application expects, such as a block page served with 200
     ERR<n>   Any other curl failure, <n> is the curl exit code
 
-    OCI probe only (--oci), shown in place of the usual codes:
+    oci profile only, shown in place of the usual codes:
     MANIFEST<n> The registry answered the manifest request with status <n>
                 instead of a 2xx (and it was not an auth challenge)
     NOAUTH      Registry demanded a token but sent no usable realm in
                 WWW-Authenticate
     NOTOKEN     Token endpoint did not return a usable token
     NOMANIFEST  Manifest arrived but had no parseable blob digest
+    RATELIMIT   The registry throttled the request, at the manifest or the
+                blob step. Not a blocked path: the registry answered and
+                said to slow down
     RESET       Blob request completed but returned no bytes, which is
                 what a mid-transfer reset through a filtering proxy looks
                 like from curl's side
@@ -1301,12 +1339,12 @@ PROBE PROFILES:
     generic  HEAD on the host root, judged by the status code. The default
     apt      GET of the repository index with APT's User-Agent and headers,
              reachable only when a complete PGP signed document arrives
-    oci      Manifest fetch (with an anonymous pull token, which both
-             registries demand) followed by a ranged GET on a blob. Not a
-             --source profile: it needs a registry, repository and tag, so
-             it runs only with --oci against the built-in Canonical
-             registries. It covers the CDN edge this run's source address
-             was routed to, not every edge a real pull might hit
+    oci      Manifest fetch (with an anonymous pull token, which the
+             registries demand) followed by a ranged GET on a blob. The
+             source is written as an OCI reference,
+             scheme://registry/repository:tag, so --source can point at an
+             internal registry. It covers the CDN edge this run's source
+             address was routed to, not every edge a real pull might hit
 
 HEREDOC
 }
@@ -1354,10 +1392,6 @@ _parse_options() {
       ;;
     -p | --parallel)
       _PARALLEL=true
-      shift
-      ;;
-    --oci)
-      _CHECK_OCI=true
       shift
       ;;
     -f | --format)
@@ -1494,17 +1528,6 @@ _main() {
   # Run the checks
   _check_protocol "http"
   _check_protocol "https"
-
-  # OCI registry checks are opt-in (--oci): they cost two or three requests
-  # per registry instead of one, and not every deployment this script runs
-  # against is a k8s one.
-  if [[ "$_CHECK_OCI" == "true" ]]; then
-    if [[ "$_OUTPUT_FORMAT" == "text" ]]; then
-      echo
-      _print_color "$_BLUE" "=== Checking OCI registry sources ==="
-    fi
-    _check_oci_sources
-  fi
 
   # Print summary
   _print_skipped
