@@ -60,12 +60,28 @@ mint_certs() {
     openssl req -newkey rsa:2048 -nodes -subj "$subj" \
       -addext "$([ "$name" = wrongname ] && echo 'subjectAltName=DNS:somewhere.else' || echo "$san")" \
       -keyout "$CERTS/$name.key" -out "$CERTS/$name.csr" 2>/dev/null
-    local dates=()
-    [ "$name" = expired ] &&
-      dates=(-not_before 20240101000000Z -not_after 20240102000000Z)
-    openssl x509 -req -in "$CERTS/$name.csr" -CA "$CERTS/ca.pem" \
-      -CAkey "$CERTS/ca.key" -CAcreateserial -days 1 -copy_extensions copy \
-      ${dates[@]+"${dates[@]}"} -out "$CERTS/$name.pem" 2>/dev/null
+    if [ "$name" = expired ]; then
+      # x509 -req only grew -not_before/-not_after in OpenSSL 3.4, and the
+      # CI runner carries 3.0, which this failed on at its first outing.
+      # openssl ca has taken -startdate/-enddate since long before 3.0, at
+      # the cost of a one-shot CA database.
+      : >"$CERTS/index.txt"
+      echo 01 >"$CERTS/serial"
+      printf '%s\n' '[ca]' 'default_ca = stub' '[stub]' \
+        "database = $CERTS/index.txt" "serial = $CERTS/serial" \
+        "new_certs_dir = $CERTS" "certificate = $CERTS/ca.pem" \
+        "private_key = $CERTS/ca.key" 'default_md = sha256' \
+        'policy = pol' 'copy_extensions = copy' 'email_in_dn = no' \
+        'unique_subject = no' '[pol]' 'commonName = supplied' \
+        >"$CERTS/ca.cnf"
+      openssl ca -config "$CERTS/ca.cnf" -batch -notext \
+        -startdate 20240101000000Z -enddate 20240102000000Z \
+        -in "$CERTS/$name.csr" -out "$CERTS/$name.pem" 2>/dev/null
+    else
+      openssl x509 -req -in "$CERTS/$name.csr" -CA "$CERTS/ca.pem" \
+        -CAkey "$CERTS/ca.key" -CAcreateserial -days 1 -copy_extensions copy \
+        -out "$CERTS/$name.pem" 2>/dev/null
+    fi
   done
   openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "$subj" \
     -addext "$san" -keyout "$CERTS/selfsigned.key" \
