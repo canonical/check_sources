@@ -316,20 +316,35 @@ checks an internal registry without editing the script.
 
 They are ordinary sources in every other way: `--include` and `--exclude` select
 them, they appear in the HTTPS section with everything else, and they are checked on
-every run. Two are built in, Canonical's Ubuntu image on ECR Public and the
-`ubuntu/*` namespace on the Docker registry. Both demand an anonymous pull token,
-which the probe requests from the realm named in their auth challenge and sends only
-back to that registry.
+every run. Five are built in, chosen as registries a Canonical deployment pulls
+from rather than only ones Canonical publishes to:
+
+| Reference                                  | Why it is there                               |
+|--------------------------------------------|-----------------------------------------------|
+| `public.ecr.aws/ubuntu/ubuntu:24.04`       | Canonical's Ubuntu image on ECR Public        |
+| `registry-1.docker.io/ubuntu/nginx:latest` | Canonical's `ubuntu/*` Docker Hub namespace   |
+| `rocks.canonical.com/cdk/pause:3.9`        | Canonical's ROCKs, used by Charmed Kubernetes |
+| `registry.k8s.io/pause:3.10`               | The pause image every Kubernetes node pulls   |
+| `quay.io/ceph/ceph:v19`                    | Ceph, consumed by Charmed Ceph and MicroCeph  |
+
+`registry.jujucharms.com` is not among them. Its token endpoint requires
+credentials, so there is no anonymous probe to make; it is checked as a `generic`
+source instead, and passes.
+
+Registries that demand an anonymous pull token get one from the realm named in
+their auth challenge, and it is sent only back to that registry. When a challenge
+names a realm but no scope, the standard `repository:<repository>:pull` is used,
+because a registry that omits the scope still requires one.
 
 The blob request is a ranged `GET` of the first 64 KiB rather than a whole layer, so
 it crosses the registry, CDN and storage path a real image pull takes without the
 cost of one. It only covers the CDN edge this run's source address was routed to.
 
-These two sources cost two or three requests each, where every other source costs
-one, and they make a run depend on two external registries. To skip them:
+These five sources cost two or three requests each, where every other source costs
+one, and they make a run depend on registries outside the deployment. To skip them:
 
 ```bash
-./check_sources.sh --exclude 'ecr|docker\.io'
+./check_sources.sh --exclude 'ecr|docker\.io|rocks\.canonical|registry\.k8s\.io|quay\.io'
 ```
 
 The `apt` profile sends the User-Agent `Debian APT-HTTP/1.3 (<version>)`, which is

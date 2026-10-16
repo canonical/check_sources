@@ -295,11 +295,19 @@ readonly _SOURCES=(
   http://packages.elasticsearch.org
   https://packages.elasticsearch.org
   https://registry.jujucharms.com
-  # Container registries. Written as OCI references so they stay inside the
-  # "url|profile" grammar: the oci profile takes the registry, repository
-  # and tag apart again.
+  # Container registries a deployment pulls from, not only the ones
+  # Canonical publishes to: a blocked registry.k8s.io stops a cluster as
+  # surely as a blocked archive. Written as OCI references so they stay
+  # inside the "url|profile" grammar.
+  #
+  # registry.jujucharms.com is deliberately absent: its token endpoint
+  # requires credentials, so there is no anonymous probe to make. It is
+  # checked as a generic source above.
   "https://public.ecr.aws/ubuntu/ubuntu:24.04|oci"
   "https://registry-1.docker.io/ubuntu/nginx:latest|oci"
+  "https://rocks.canonical.com/cdk/pause:3.9|oci"
+  "https://registry.k8s.io/pause:3.10|oci"
+  "https://quay.io/ceph/ceph:v19|oci"
 )
 
 ###############################################################################
@@ -987,6 +995,16 @@ _oci_resolve_blob() {
       return 1
     fi
 
+    # Some registries, rocks.canonical.com among them, send a realm and a
+    # service but no scope, and then refuse to mint a token for an empty
+    # one. The repository was already decomposed from the source URL, so
+    # the standard scope an OCI client would send costs nothing to build.
+    # A challenge that does carry a scope keeps it, including the ECR one,
+    # whose "aws" scope is not repository-shaped.
+    if [[ -z "$scope" ]]; then
+      scope="repository:${repository}:pull"
+    fi
+
     # Docker's registry returns both "token" and "access_token", the ECR one
     # returns only "token", which is why this needs the first match rather
     # than the only match.
@@ -1045,11 +1063,35 @@ _oci_resolve_blob() {
   if [[ -n "$digest" ]]; then
     # That digest names a manifest, not a blob yet: fetch it (same auth,
     # same host) to get to the actual layer digests.
+    #
+    # Into its own file, and adopted only on success. Writing straight over
+    # body_file would replace a good index with an error document whenever
+    # this second request failed, and the grep below would then report
+    # NOMANIFEST as if the registry had sent something unparseable. The
+    # status is a manifest status like any other, so it is reported as one.
+    local hop_file hop_status
+    hop_file=$(mktemp "${_TMPDIR}/oci-arch.XXXXXX")
     local arch_curl=(curl -s -m "$_TIMEOUT" --connect-timeout 5 --insecure -L --max-redirs "$_MAX_REDIRS"
-      -o "$body_file" -w '%{http_code}' -A "$_USER_AGENT" -H "Accept: ${accept}")
+      -o "$hop_file" -w '%{http_code}' -A "$_USER_AGENT" -H "Accept: ${accept}")
     [[ -n "$auth_field" ]] && arch_curl+=(-H "$auth_field")
     [[ -n "$_PROXY_URL" ]] && arch_curl+=(--proxy "$_PROXY_URL")
-    timeout "$_TIMEOUT" "${arch_curl[@]}" "${registry}/v2/${repository}/manifests/${digest}" >/dev/null 2>&1
+
+    hop_status=$(timeout "$_TIMEOUT" "${arch_curl[@]}" \
+      "${registry}/v2/${repository}/manifests/${digest}" 2>/dev/null) || hop_status=""
+
+    if [[ "$hop_status" == "429" ]]; then
+      rm -f "$hop_file"
+      echo "||RATELIMIT"
+      return 1
+    fi
+
+    if [[ ! "$hop_status" =~ ^2[0-9][0-9]$ ]]; then
+      rm -f "$hop_file"
+      echo "||MANIFEST${hop_status:-ERR}"
+      return 1
+    fi
+
+    mv -f "$hop_file" "$body_file"
   fi
 
   # The blob to range-request: the last layer listed (biggest, usually the
