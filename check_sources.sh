@@ -304,11 +304,19 @@ readonly _SOURCES=(
   # registry.jujucharms.com is deliberately absent: its token endpoint
   # requires credentials, so there is no anonymous probe to make. It is
   # checked as a generic source above.
+  #
+  # rocks.canonical.com is absent too. Canonical has made it a temporary
+  # service, to be retired in early 2027, with ghcr.io/canonical/cdk the
+  # supported registry from Charmed Kubernetes 1.36 on. It also answered
+  # about four times slower than any other registry here, which with five
+  # requests per probe put it over the timeout in roughly 40% of parallel
+  # runs on a healthy network. The ghcr.io entry below covers the same host
+  # and CDN path its replacement uses.
   "https://public.ecr.aws/ubuntu/ubuntu:24.04|oci"
   "https://registry-1.docker.io/ubuntu/nginx:latest|oci"
-  "https://rocks.canonical.com/cdk/pause:3.9|oci"
   "https://registry.k8s.io/pause:3.10|oci"
   "https://quay.io/ceph/ceph:v19|oci"
+  "https://ghcr.io/canonical/metrics-server:0.7.2-ck7|oci"
 )
 
 ###############################################################################

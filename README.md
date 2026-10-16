@@ -48,7 +48,7 @@ The cost is accepted on purpose: a script long enough that a real language would
 
 - **Container Registries**: A source can be an OCI image reference, probed with the `oci` profile: it resolves the manifest with an anonymous pull token, follows a multi-arch index to the amd64 manifest, and range-GETs the first 64 KiB of a layer. That crosses the registry to CDN to storage-backend path a real `docker pull` takes, which a `HEAD` on the host never reaches
 - **Five Registries Built In**: `public.ecr.aws`, `registry-1.docker.io`, `rocks.canonical.com`, `registry.k8s.io` and `quay.io`, each with an image a Canonical deployment genuinely pulls. A blocked `registry.k8s.io` stops a cluster coming up as surely as a blocked archive, so the list covers what a deployment consumes and not only what Canonical publishes
-- **Registry Failure Labels**: `MANIFEST<n>`, `NOMANIFEST`, `NOTOKEN`, `DENIED`, `RATELIMIT` and `RESET` say which step of the pull failed, so a throttled registry is not mistaken for a firewall rule
+- **Registry Failure Labels**: `MANIFEST<n>`, `NOMANIFEST`, `NOTOKEN`, `RATELIMIT` and `RESET` say which step of the pull failed, so a throttled registry is not mistaken for a firewall rule
 - **HTTPS-Only Frontends**: `usn.ubuntu.com`, `jujucharms.com`, `jaas.ai` and `charmhub.io` are no longer checked over HTTP. Their addresses do not accept a connection on port 80, so those four entries failed on every healthy network for a path no client takes
 
 The built-in list goes from 46 URLs to 47. Both numbers moved: five registries were
@@ -333,17 +333,24 @@ them, they appear in the HTTPS section with everything else, and they are checke
 every run. Five are built in, chosen as registries a Canonical deployment pulls
 from rather than only ones Canonical publishes to:
 
-| Reference                                  | Why it is there                               |
-|--------------------------------------------|-----------------------------------------------|
-| `public.ecr.aws/ubuntu/ubuntu:24.04`       | Canonical's Ubuntu image on ECR Public        |
-| `registry-1.docker.io/ubuntu/nginx:latest` | Canonical's `ubuntu/*` Docker Hub namespace   |
-| `rocks.canonical.com/cdk/pause:3.9`        | Canonical's ROCKs, used by Charmed Kubernetes |
-| `registry.k8s.io/pause:3.10`               | The pause image every Kubernetes node pulls   |
-| `quay.io/ceph/ceph:v19`                    | Ceph, consumed by Charmed Ceph and MicroCeph  |
+| Reference                                    | Why it is there                              |
+|----------------------------------------------|----------------------------------------------|
+| `public.ecr.aws/ubuntu/ubuntu:24.04`         | Canonical's Ubuntu image on ECR Public       |
+| `registry-1.docker.io/ubuntu/nginx:latest`   | Canonical's `ubuntu/*` Docker Hub namespace  |
+| `ghcr.io/canonical/metrics-server:0.7.2-ck7` | metrics-server, a Charmed Kubernetes default |
+| `registry.k8s.io/pause:3.10`                 | The pause image every Kubernetes node pulls  |
+| `quay.io/ceph/ceph:v19`                      | Ceph, consumed by Charmed Ceph and MicroCeph |
 
 `registry.jujucharms.com` is not among them. Its token endpoint requires
 credentials, so there is no anonymous probe to make; it is checked as a `generic`
 source instead, and passes.
+
+`rocks.canonical.com` is not among them either. Canonical has made it a temporary
+service, to be retired in early 2027, and `ghcr.io/canonical/cdk` is the supported
+registry from Charmed Kubernetes 1.36 on. It also answered about four times slower
+than any other registry here, which with five requests per probe put it over the
+timeout in roughly 40% of parallel runs on a healthy network. The `ghcr.io` entry
+covers the same host and CDN path its replacement uses.
 
 Registries that demand an anonymous pull token get one from the realm named in
 their auth challenge, and it is sent only back to that registry. When a challenge
@@ -358,7 +365,7 @@ These five sources cost two or three requests each, where every other source cos
 one, and they make a run depend on registries outside the deployment. To skip them:
 
 ```bash
-./check_sources.sh --exclude 'ecr|docker\.io|rocks\.canonical|registry\.k8s\.io|quay\.io'
+./check_sources.sh --exclude 'ecr|docker\.io|ghcr\.io|registry\.k8s\.io|quay\.io'
 ```
 
 The `apt` profile sends the User-Agent `Debian APT-HTTP/1.3 (<version>)`, which is
