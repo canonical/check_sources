@@ -326,11 +326,11 @@ URL where `apt update` is reset. A probe profile makes the check send the reques
 the consuming application sends, and judge the answer the way that application
 would.
 
-| Profile   | Request                                                                    | Counts as reachable when                                |
-|-----------|----------------------------------------------------------------------------|---------------------------------------------------------|
-| `generic` | `HEAD` on the host root, with the script's own User-Agent                  | The status code is 2xx, 3xx, 400, 401, 404, 405, or 429 |
-| `apt`     | `GET` of the repository index, with APT's User-Agent and headers           | A complete PGP signed document arrives                  |
-| `oci`     | Manifest fetch with an anonymous pull token, then a ranged `GET` on a blob | Bytes of the blob actually arrive (200 or 206)          |
+| Profile   | Request                                                                                   | Counts as reachable when                                |
+|-----------|-------------------------------------------------------------------------------------------|---------------------------------------------------------|
+| `generic` | `HEAD` on the host root, with the script's own User-Agent                                 | The status code is 2xx, 3xx, 400, 401, 404, 405, or 429 |
+| `apt`     | `GET` of the repository index, with APT's User-Agent and headers                          | A complete PGP signed document arrives                  |
+| `oci`     | Manifest fetch with an anonymous pull token, then a ranged `GET` on a blob, as containerd | Bytes of the blob actually arrive (200 or 206)          |
 
 `generic` is the default, so a source declared as a bare URL behaves exactly as it
 did before profiles existed.
@@ -373,6 +373,17 @@ because a registry that omits the scope still requires one.
 The blob request is a ranged `GET` of the first 64 KiB rather than a whole layer, so
 it crosses the registry, CDN and storage path a real image pull takes without the
 cost of one. It only covers the CDN edge this run's source address was routed to.
+
+Every request of an `oci` probe carries containerd's User-Agent, a single
+`containerd/<version>` product token, because containerd is what pulls images on a
+Kubernetes node. This is the same reason the `apt` profile sends APT's. The string
+was read from containerd's source, `core/remotes/docker/resolver.go`, rather than
+observed on the wire, which is weaker evidence than the APT one had.
+
+The version is read from the containerd installed on the machine running the check
+and falls back to a default when there is none. That fallback is the usual path, not
+the exception: a check is normally run from a jump box before the deployment exists.
+So the version describes the machine running the check, never a cluster.
 
 That path leaves the registry. Every one of the five redirects the blob to a
 separate delivery host, and `registry.k8s.io` redirects the manifest as well, to a

@@ -98,6 +98,15 @@ _RELEASE=""
 _APT_VERSION_DEFAULT="2.8.3"
 _APT_VERSION="$_APT_VERSION_DEFAULT"
 
+# Version reported in the oci profile's User-Agent, resolved from the local
+# containerd by _resolve_containerd_version. The default is the usual path
+# rather than the exception: a check is normally run from a jump box before
+# the deployment exists, so there is no containerd to ask. It is the version
+# k8s-snap 1.36 ships. A classifier reads the product token, not the number,
+# so this does not need to track upstream.
+_CONTAINERD_VERSION_DEFAULT="2.3.3"
+_CONTAINERD_VERSION="$_CONTAINERD_VERSION_DEFAULT"
+
 # Per-run scratch directory for response bodies, created by _main and removed
 # by its EXIT trap. Background subshells do not inherit that trap, so the
 # directory survives until every probe has finished.
@@ -631,6 +640,27 @@ _resolve_apt_version() {
   fi
 }
 
+# Resolve the containerd version reported in the oci profile's User-Agent,
+# the same way the apt version is resolved. "containerd github.com/containerd/
+# containerd/v2 v2.3.3 <commit>" is what the command prints, so the version
+# is the field that starts with a v.
+_resolve_containerd_version() {
+  local reported=""
+
+  if _command_exists containerd; then
+    reported=$(containerd --version 2>/dev/null | head -1 |
+      awk '{for (i = 1; i <= NF; i++) if ($i ~ /^v[0-9]+(\.[0-9]+)+$/) { print substr($i, 2); exit }}') ||
+      reported=""
+  fi
+
+  if [[ "$reported" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+    _CONTAINERD_VERSION="$reported"
+    _log "containerd version from the local containerd: $_CONTAINERD_VERSION"
+  else
+    _log "No local containerd, using default version: $_CONTAINERD_VERSION"
+  fi
+}
+
 # Resolve the release codename substituted into a profiled source path.
 # --release wins; otherwise the local system is asked. Leaving it empty is
 # not an error: it only means the sources that need one are skipped.
@@ -1004,6 +1034,22 @@ _check_single_source() {
   fi
 }
 
+# The User-Agent every oci request carries. containerd sets it in one place,
+# core/remotes/docker/resolver.go, as a single "containerd/<version>" product
+# token with no trailing comment, and only when no header was supplied. That
+# is what a classifier sees from a Kubernetes node pulling an image, so it is
+# what this probe sends, for the same reason the apt profile sends APT's.
+#
+# An explicit --user-agent wins, as it does for a profiled generic source,
+# with the same consequence: it defeats the fingerprint.
+_oci_user_agent() {
+  if [[ "$_USER_AGENT_SET" == "true" ]]; then
+    echo "$_USER_AGENT"
+  else
+    echo "containerd/${_CONTAINERD_VERSION}"
+  fi
+}
+
 # Pull the manifest digest and size for one OCI source without downloading
 # the blob. Needed because the failure this profile chases is a reset
 # partway through the blob transfer, not at the manifest: the manifest GET
@@ -1028,7 +1074,7 @@ _oci_resolve_blob() {
     curl -s -m "$_TIMEOUT" --connect-timeout 5 -L --max-redirs "$_MAX_REDIRS"
     -D "$headers_file" -o "$body_file"
     -w '%{http_code}\t%{ssl_verify_result}\t%{num_redirects}\t%{url_effective}'
-    -A "$_USER_AGENT" -H "Accept: ${accept}"
+    -A "$(_oci_user_agent)" -H "Accept: ${accept}"
   )
   [[ "$_INSECURE" == true ]] && curl_cmd+=(--insecure)
   [[ -n "$_PROXY_URL" ]] && curl_cmd+=(--proxy "$_PROXY_URL")
@@ -1107,7 +1153,7 @@ _oci_resolve_blob() {
     # Docker's registry returns both "token" and "access_token", the ECR one
     # returns only "token", which is why this needs the first match rather
     # than the only match.
-    local token_curl=(curl -s -m "$_TIMEOUT" --connect-timeout 5 -A "$_USER_AGENT")
+    local token_curl=(curl -s -m "$_TIMEOUT" --connect-timeout 5 -A "$(_oci_user_agent)")
     [[ "$_INSECURE" == true ]] && token_curl+=(--insecure)
     pull_token=$("${token_curl[@]}" \
       "${realm}?service=${service}&scope=${scope}" 2>/dev/null |
@@ -1178,7 +1224,7 @@ _oci_resolve_blob() {
     hop_file=$(mktemp "${_TMPDIR}/oci-arch.XXXXXX")
     local arch_curl=(curl -s -m "$_TIMEOUT" --connect-timeout 5 -L --max-redirs "$_MAX_REDIRS"
       -o "$hop_file" -w '%{http_code}\t%{num_redirects}\t%{url_effective}'
-      -A "$_USER_AGENT" -H "Accept: ${accept}")
+      -A "$(_oci_user_agent)" -H "Accept: ${accept}")
     [[ "$_INSECURE" == true ]] && arch_curl+=(--insecure)
     [[ -n "$auth_field" ]] && arch_curl+=(-H "$auth_field")
     [[ -n "$_PROXY_URL" ]] && arch_curl+=(--proxy "$_PROXY_URL")
@@ -1257,7 +1303,7 @@ _oci_probe_once() {
   local curl_cmd=(
     curl -s -m "$_TIMEOUT" --connect-timeout 5 -L --max-redirs "$_MAX_REDIRS"
     -o /dev/null -w '%{http_code}\t%{size_download}\t%{num_redirects}\t%{url_effective}'
-    -A "$_USER_AGENT" -H "Range: bytes=0-65535"
+    -A "$(_oci_user_agent)" -H "Range: bytes=0-65535"
   )
   [[ "$_INSECURE" == true ]] && curl_cmd+=(--insecure)
   [[ -n "$auth_field" ]] && curl_cmd+=(-H "$auth_field")
@@ -1581,7 +1627,13 @@ PROBE PROFILES:
     apt      GET of the repository index with APT's User-Agent and headers,
              reachable only when a complete PGP signed document arrives
     oci      Manifest fetch (with an anonymous pull token, which the
-             registries demand) followed by a ranged GET on a blob. The
+             registries demand) followed by a ranged GET on a blob, each
+             request carrying containerd's User-Agent, since containerd is
+             what pulls images on a Kubernetes node. The version in it is
+             read from the containerd on the machine running the check and
+             falls back to a default when there is none, which is the usual
+             case on a jump box, so it describes this machine and not any
+             cluster. The
              source is written as an OCI reference,
              scheme://registry/repository:tag, so --source can point at an
              internal registry. It covers the CDN edge this run's source
@@ -1771,6 +1823,7 @@ _main() {
   # Resolve once here rather than per probe, so that the parallel subshells
   # inherit the value instead of each asking the local apt for it.
   _resolve_apt_version
+  _resolve_containerd_version
 
   # Print CSV header if needed
   if [[ "$_OUTPUT_FORMAT" == "csv" ]]; then
