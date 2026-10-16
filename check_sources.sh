@@ -1131,9 +1131,16 @@ _oci_resolve_blob() {
     # output. Collect everything and trim in the shell instead.
     www_auth=$(grep -i '^www-authenticate:' "$headers_file" | tr -d '\r') || www_auth=""
     www_auth=${www_auth%%$'\n'*}
-    realm=$(echo "$www_auth" | grep -oP 'realm="\K[^"]+') || realm=""
-    service=$(echo "$www_auth" | grep -oP 'service="\K[^"]+') || service=""
-    scope=$(echo "$www_auth" | grep -oP 'scope="\K[^"]+') || scope=""
+    # -oE rather than -oP: PCRE is a GNU extension, and the documented
+    # dependencies are curl, coreutils and Bash, so a BusyBox grep must
+    # parse this too. The key prefix and closing quote stay in the match
+    # and are stripped here, the same shape the multi-arch parser uses.
+    realm=$(echo "$www_auth" | grep -oE 'realm="[^"]*"') || realm=""
+    realm=${realm%%$'\n'*}; realm=${realm%\"}; realm=${realm##*\"}
+    service=$(echo "$www_auth" | grep -oE 'service="[^"]*"') || service=""
+    service=${service%%$'\n'*}; service=${service%\"}; service=${service##*\"}
+    scope=$(echo "$www_auth" | grep -oE 'scope="[^"]*"') || scope=""
+    scope=${scope%%$'\n'*}; scope=${scope%\"}; scope=${scope##*\"}
 
     if [[ -z "$realm" ]]; then
       echo "||NOAUTH|${hops:-0}|${reached}"
@@ -1153,12 +1160,20 @@ _oci_resolve_blob() {
     # Docker's registry returns both "token" and "access_token", the ECR one
     # returns only "token", which is why this needs the first match rather
     # than the only match.
+    # The same two timeout layers and the same proxy the other requests get.
+    # This was the one call with neither: a stall here hung the parallel
+    # wait with no output, and on a proxied network the fetch went out
+    # direct and blamed the token endpoint for the block.
     local token_curl=(curl -s -m "$_TIMEOUT" --connect-timeout 5 -A "$(_oci_user_agent)")
     [[ "$_INSECURE" == true ]] && token_curl+=(--insecure)
-    pull_token=$("${token_curl[@]}" \
+    [[ -n "$_PROXY_URL" ]] && token_curl+=(--proxy "$_PROXY_URL")
+    pull_token=$(timeout "$_TIMEOUT" "${token_curl[@]}" \
       "${realm}?service=${service}&scope=${scope}" 2>/dev/null |
-      grep -oP '"(token|access_token)"\s*:\s*"\K[^"]+') || pull_token=""
+      grep -oE '"(token|access_token)"[[:space:]]*:[[:space:]]*"[^"]*"') ||
+      pull_token=""
     pull_token=${pull_token%%$'\n'*}
+    pull_token=${pull_token%\"}
+    pull_token=${pull_token##*\"}
 
     if [[ -z "$pull_token" ]]; then
       echo "||NOTOKEN|${hops:-0}|${reached}"
@@ -1265,8 +1280,10 @@ _oci_resolve_blob() {
   # application layer rather than a thin metadata one) in whichever
   # manifest body is now on disk, single-arch either from the start or
   # after the hop above.
-  digest=$(grep -oP '"digest"\s*:\s*"\K[^"]+' "$body_file" | tail -1) || digest=""
-  size=$(grep -oP '"size"\s*:\s*\K[0-9]+' "$body_file" | tail -1) || size=""
+  digest=$(grep -oE '"digest"[[:space:]]*:[[:space:]]*"[^"]*"' "$body_file" | tail -1) || digest=""
+  digest=${digest%\"}; digest=${digest##*\"}
+  size=$(grep -oE '"size"[[:space:]]*:[[:space:]]*[0-9]+' "$body_file" | tail -1) || size=""
+  size=${size##*[!0-9]}
 
   if [[ -z "$digest" ]]; then
     echo "||NOMANIFEST|${hops:-0}|${reached}"
@@ -1420,7 +1437,7 @@ _check_sources_parallel() {
   # Background jobs run in subshells and cannot update the parent's
   # counters, so each one appends to a shared file that is read back
   # once every job has finished.
-  _RESULT_FILE=$(mktemp)
+  _RESULT_FILE=$(mktemp "${_TMPDIR}/results.XXXXXX")
 
   for url in "${urls[@]}"; do
     # The "|| true" matters as much here as in the sequential path, and for
