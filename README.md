@@ -583,7 +583,6 @@ The following enhancements are planned for future versions:
 - **IPv6 Support**: `-4` and `-6` options to force IPv4 or IPv6 for dual-stack deployments
 - **Enhanced JSON**: A single JSON document with a summary object and the list of results, instead of one object per line
 - **Progress Indicator**: A `[n/total]` counter in sequential text mode
-- **Exit Code Alignment**: Missing dependencies and invalid proxy URLs currently exit with 1 instead of the documented 2
 
 ---
 
