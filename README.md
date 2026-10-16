@@ -44,6 +44,45 @@ The cost is accepted on purpose: a script long enough that a real language would
 - **Color Aware Output**: Colors are disabled automatically when piped, when `NO_COLOR` is set, or with `--no-color`
 - **Reliable Parallel Mode**: Summary counts and exit code are correct with `--parallel`, and a failed source no longer aborts the run
 
+### What's New (v4.0.0)
+
+- **Certificate Verification**: Probes verify server certificates by default,
+  against the same trust store `apt`, `docker` and `juju` use. A source whose
+  certificate the machine rejects is reported unreachable with a label naming why:
+  `CERTEXPIRED`, `CERTNAME`, `CERTUNTRUSTED` or `CERT<n>`. One further request with
+  verification off distinguishes a bad certificate on an open path from a path that
+  is closed. `--insecure` restores the old behavior for the whole run
+- **Real Destinations for Registries**: An `oci` result reports the host the probe
+  actually reached. Every registry hands the blob to a CDN, and `registry.k8s.io`
+  sends even the manifest to a region-specific host, so a failure now names the
+  host a firewall rule would have to allow instead of the registry that was typed
+- **containerd Fingerprint**: The `oci` profile sends `containerd/<version>` on all
+  of its requests, as the `apt` profile sends APT's, with the version read from the
+  local containerd or a documented default
+- **Runs on BusyBox**: The OCI probe no longer needs GNU grep, so a minimal jump
+  box or container reports what the network did rather than what its grep could not
+  parse. The token request also gained the timeout and proxy handling every other
+  request already had
+- **Bounded Parallelism**: `--parallel` runs at most 64 probes at once, a throttled
+  registry is reported without being retried, and token query values are
+  URL-encoded by curl
+- **Correct Exit Codes**: Missing dependencies and an invalid proxy exit `2` as
+  documented, instead of `1`
+- **Test Suite and CI**: An offline bats suite in `tests/` covers the probe flows
+  against local stubs, a sync check keeps the three failure label lists identical,
+  and GitHub Actions runs it all on every push
+
+**Breaking changes.** A run on a network that intercepts TLS with a CA the machine
+does not trust goes from all green to all red; that is the verification working,
+and `--insecure` is the escape hatch while the CA is installed. The machine-readable
+`code` field gains the `CERT*` values. On OCI rows, `redirects` and `final_url`
+change value: they previously claimed zero redirects and a registry URL for
+transfers that were redirected to a CDN, so consumers reading them were reading
+false values. Exit code `1` from a missing dependency or malformed proxy becomes
+`2`. `https://ppa.launchpad.net` now fails with `CERTNAME` on every network,
+because its certificate only covers `private-ppa.launchpad.net`; that is a finding,
+not a regression.
+
 ### Fixed in v3.2.1
 
 - **Registry Swap**: `rocks.canonical.com` is replaced by `ghcr.io/canonical/metrics-server:0.7.2-ck7`. Canonical has made the ROCKs registry a temporary service, to be retired in early 2027, with `ghcr.io/canonical/cdk` the supported registry from Charmed Kubernetes 1.36 on. It was also the one source that failed a healthy run: about four times slower than any other registry, which with five requests per probe put it over the timeout in 3 of 10 parallel runs
