@@ -185,7 +185,10 @@ Colored output is used only when standard output is a terminal. It is turned off
                         probe downloads a repository index rather than headers
                         only, so it needs more time on a slow link
 -r, --retries COUNT     Set number of retries for failed checks (default: 2)
--p, --parallel          Run checks in parallel (faster execution)
+-p, --parallel          Run checks in parallel (faster execution). At most 64
+                        probes run at once, so a large --sources-file costs a
+                        plateau of processes rather than one per source; the
+                        built-in list is below the bound and runs in one burst
 -f, --format FORMAT     Output format: text, json, csv, yaml (default: text)  
 -l, --log FILE          Log detailed output to specified file
 -u, --user-agent STRING Set custom User-Agent header. Applies to profiled

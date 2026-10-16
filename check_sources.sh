@@ -67,6 +67,11 @@ _RESET='\033[0m'
 _TIMEOUT=10
 _RETRIES=2
 _PARALLEL=false
+# Most probes allowed to run at once in parallel mode. Above the built-in
+# list's size, so a default run spawns in one burst exactly as an unbounded
+# one; a large --sources-file plateaus here instead of exhausting process
+# slots or file descriptors before anything is reported.
+declare -i _PARALLEL_MAX=64
 _VERBOSE=false
 _OUTPUT_FORMAT="text"
 _MAX_REDIRS=10
@@ -1167,8 +1172,13 @@ _oci_resolve_blob() {
     local token_curl=(curl -s -m "$_TIMEOUT" --connect-timeout 5 -A "$(_oci_user_agent)")
     [[ "$_INSECURE" == true ]] && token_curl+=(--insecure)
     [[ -n "$_PROXY_URL" ]] && token_curl+=(--proxy "$_PROXY_URL")
+    # -G --data-urlencode: curl builds the query and encodes the values,
+    # so a service or scope carrying a character with meaning in a URL
+    # reaches the endpoint intact instead of corrupting the request and
+    # blaming the token endpoint for it.
+    token_curl+=(-G --data-urlencode "service=${service}" --data-urlencode "scope=${scope}")
     pull_token=$(timeout "$_TIMEOUT" "${token_curl[@]}" \
-      "${realm}?service=${service}&scope=${scope}" 2>/dev/null |
+      "$realm" 2>/dev/null |
       grep -oE '"(token|access_token)"[[:space:]]*:[[:space:]]*"[^"]*"') ||
       pull_token=""
     pull_token=${pull_token%%$'\n'*}
@@ -1364,12 +1374,14 @@ _oci_probe_once() {
 }
 
 # A failure worth a second attempt: one that says the network did not carry
-# the request, or that the registry asked us to come back later. A 404 on a
-# manifest, a denied token or an unparseable body will answer the same way
-# every time, so retrying them only costs the run time.
+# the request. A rate limit is not among them: the answer arrived, so the
+# path is proven open, and repeating the whole flow against a registry that
+# just asked for less traffic works against the operator being throttled.
+# A 404 on a manifest, a denied token or an unparseable body will answer
+# the same way every time, so retrying them only costs the run time.
 _oci_retryable() {
   case "$1" in
-    TIMEOUT|DNS|REFUSED|TLS|REDIRS|RESET|RATELIMIT|ERR*) return 0 ;;
+    TIMEOUT|DNS|REFUSED|TLS|REDIRS|RESET|ERR*) return 0 ;;
     MANIFEST5[0-9][0-9]) return 0 ;;
     *) return 1 ;;
   esac
@@ -1440,6 +1452,17 @@ _check_sources_parallel() {
   _RESULT_FILE=$(mktemp "${_TMPDIR}/results.XXXXXX")
 
   for url in "${urls[@]}"; do
+    # Keep the running-job count at the bound. wait -n would reap more
+    # idiomatically but needs Bash 4.3, and the README promises 4.0; a
+    # fixed batch would last as long as its slowest member, which on this
+    # list means the 11-second timeouts gating every batch. Polling only
+    # costs anything while saturated, which only happens on lists larger
+    # than the built-in one. This function spawns nothing else in this
+    # shell, so the job count is the probe count.
+    while (( $(jobs -rp | wc -l) >= _PARALLEL_MAX )); do
+      sleep 0.2
+    done
+
     # The "|| true" matters as much here as in the sequential path, and for
     # a second reason. A failed check returns 1, which must not abort the
     # run; but a bare "&" also leaves errexit armed inside the background
@@ -1543,7 +1566,10 @@ OPTIONS:
                             rather than headers only, so it needs more time
                             on a slow link
     -r, --retries COUNT     Set number of retries for failed checks (default: $_RETRIES)
-    -p, --parallel          Run checks in parallel (faster but less readable)
+    -p, --parallel          Run checks in parallel (faster but less readable).
+                            At most $_PARALLEL_MAX probes run at once, so a
+                            large --sources-file costs a plateau of processes
+                            rather than one per source
     -f, --format FORMAT     Output format: text, json, csv, yaml (default: text)
     -l, --log FILE          Log detailed output to file
     -u, --user-agent STRING Set custom User-Agent (default: $_USER_AGENT).
