@@ -222,7 +222,8 @@ mode. It parses to the same structure either way.
 
 ## Tested Services
 
-The built-in list has 46 URLs across 31 hosts. Hosts are grouped as in the script; most are checked over both HTTP and HTTPS.
+The built-in list has 47 URLs across 35 hosts. Hosts are grouped as in the script; most are checked over both HTTP and HTTPS.
+`usn.ubuntu.com`, `jujucharms.com`, `jaas.ai` and `charmhub.io` are checked over HTTPS only: their addresses do not accept a connection on port 80, so an HTTP entry would fail on every healthy network for a path no client takes.
 
 **Ubuntu archives and cloud images:**
 

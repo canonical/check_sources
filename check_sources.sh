@@ -255,7 +255,6 @@ readonly _SOURCES=(
   https://contracts.canonical.com
   "http://archive.ubuntu.com/ubuntu/dists/{codename}/InRelease|apt"
   "http://security.ubuntu.com/ubuntu/dists/{codename}-security/InRelease|apt"
-  http://usn.ubuntu.com
   https://usn.ubuntu.com
   # Launchpad
   http://launchpad.net
@@ -266,12 +265,14 @@ readonly _SOURCES=(
   https://ppa.launchpad.net
   http://ppa.launchpadcontent.net
   https://ppa.launchpadcontent.net
-  # Juju and Charmhub
-  http://jujucharms.com
+  # Juju and Charmhub. These web frontends answer on HTTPS only: their
+  # addresses do not accept a connection on port 80 at all, while
+  # api.charmhub.io, on a different address set, does. So no http:// entry
+  # for jujucharms.com, jaas.ai or charmhub.io, and none for usn.ubuntu.com
+  # above, which shares those addresses. Listing one would report a failure
+  # on every healthy network for a path no client takes.
   https://jujucharms.com
-  http://jaas.ai
   https://jaas.ai
-  http://charmhub.io
   https://charmhub.io
   http://api.charmhub.io
   https://api.charmhub.io
