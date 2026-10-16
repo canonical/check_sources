@@ -20,6 +20,11 @@ OCI behaviors, by repository prefix (source: http://HOST/<behavior>/x/y:1|oci):
   stall        token endpoint accepts the connection and never answers
   redirdead    anonymous manifest; blob redirects to a dead port
 
+Apt-profile behaviors, by path (source: http://HOST/<path>|apt):
+  /aptok/...   GET answers a body opening with the PGP header
+  /aptblock/.. GET answers 200 with a block page body
+  /apt404/...  GET answers 404
+
 Generic behaviors, by path:
   /g200        HEAD answers 200
   /g404        HEAD answers 404
@@ -108,6 +113,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.end_headers()
             self.wfile.write(str(peak).encode())
+            return
+
+        if self.path.startswith("/aptok/"):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(
+                b"-----BEGIN PGP SIGNED MESSAGE-----\n"
+                b"Hash: SHA512\n\nOrigin: Stub\n"
+            )
+            return
+        if self.path.startswith("/aptblock/"):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"<html>You shall not pass</html>\n")
+            return
+        if self.path.startswith("/apt404/"):
+            self.send_response(404)
+            self.end_headers()
             return
 
         behavior = self._behavior()

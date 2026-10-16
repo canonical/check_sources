@@ -301,8 +301,10 @@ CHECK_SOURCES_LIVE=1 bats tests/live.bats
 `tests/check_label_sync.sh` fails when the failure label lists in `--help`, the
 README table and the script drift apart; it runs as part of the suite and in CI.
 
-The suite needs `bats` and `python3` (for the stub servers), and uses `busybox`
-where installed to prove the script runs on a minimal grep. These are development
+The suite needs `bats`, `python3` (for the stub servers) and `openssl` (the TLS
+tests mint a throwaway CA and certificates at run time, so nothing checked in
+can expire), and uses `busybox` where installed to prove the script runs on a
+minimal grep. These are development
 dependencies only; the script itself still needs nothing beyond the list below.
 
 ## Dependencies

@@ -43,6 +43,59 @@ _wait_for_port_file() {
   return 1
 }
 
+# Mint a throwaway CA and the four leaf certificates the TLS tests need:
+# trusted, expired but trusted, wrong name, and self-signed. Minted at test
+# time rather than checked in, because a committed certificate expires and
+# starts failing CI on a date no commit caused. Each case isolates one
+# defect: the expired leaf is signed by the trusted CA, so expiry is the
+# only failure present, and so on.
+mint_certs() {
+  CERTS="${BATS_FILE_TMPDIR}/certs"
+  mkdir -p "$CERTS"
+  local subj="/CN=stub" san="subjectAltName=IP:127.0.0.1"
+  openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=stub-ca" \
+    -keyout "$CERTS/ca.key" -out "$CERTS/ca.pem" 2>/dev/null
+  local name
+  for name in good expired wrongname; do
+    openssl req -newkey rsa:2048 -nodes -subj "$subj" \
+      -addext "$([ "$name" = wrongname ] && echo 'subjectAltName=DNS:somewhere.else' || echo "$san")" \
+      -keyout "$CERTS/$name.key" -out "$CERTS/$name.csr" 2>/dev/null
+    local dates=()
+    [ "$name" = expired ] &&
+      dates=(-not_before 20240101000000Z -not_after 20240102000000Z)
+    openssl x509 -req -in "$CERTS/$name.csr" -CA "$CERTS/ca.pem" \
+      -CAkey "$CERTS/ca.key" -CAcreateserial -days 1 -copy_extensions copy \
+      ${dates[@]+"${dates[@]}"} -out "$CERTS/$name.pem" 2>/dev/null
+  done
+  openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "$subj" \
+    -addext "$san" -keyout "$CERTS/selfsigned.key" \
+    -out "$CERTS/selfsigned.pem" 2>/dev/null
+  export CERTS
+}
+
+# One HTTPS listener per certificate: $1 cert basename, $2.. extra tlsstub
+# flags. Exports TLS_URL for the test and records the pid for teardown.
+start_tls_stub() {
+  local name="$1"; shift
+  local portfile="${BATS_FILE_TMPDIR}/tls-${name}-$$.port"
+  # stdout and stderr detached: this is launched inside command
+  # substitutions, which wait for every writer of the captured stdout, so an
+  # inherited descriptor would hang the test until the server dies.
+  python3 "${FIXTURES}/tlsstub.py" "$portfile" \
+    "${CERTS}/${name}.pem" "${CERTS}/${name}.key" "$@" >/dev/null 2>&1 &
+  echo "$!" >>"${BATS_FILE_TMPDIR}/tls.pids"
+  _wait_for_port_file "$portfile"
+  TLS_URL="https://127.0.0.1:$(cat "$portfile")"
+  export TLS_URL
+}
+
+stop_tls_stubs() {
+  [[ -f "${BATS_FILE_TMPDIR}/tls.pids" ]] || return 0
+  while read -r pid; do
+    kill "$pid" 2>/dev/null || true
+  done <"${BATS_FILE_TMPDIR}/tls.pids"
+}
+
 # The CSV record for the one matching source, quotes stripped:
 # URL,Status,Code,ResponseTime,Redirects,FinalURL
 csv_row() {

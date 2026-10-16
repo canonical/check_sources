@@ -33,3 +33,28 @@ if [[ -n "$missing" ]]; then
 fi
 
 echo "label lists in sync: $(echo "$from_help" | wc -l) labels"
+
+# The option lists: every "-x, --long" the help shows must appear in the
+# README options block, and the reverse.
+opts_help=$(./check_sources.sh --help | grep -oE '^\s{4}(-[a-zA-Z], )?--[a-z][a-z-]*' |
+  grep -oE -- '--[a-z][a-z-]*' | sort -u)
+opts_readme=$(grep -oE '^(-[a-zA-Z], )?--[a-z][a-z-]*' README.md |
+  grep -oE -- '--[a-z][a-z-]*' | sort -u)
+if ! diff <(echo "$opts_help") <(echo "$opts_readme") >/dev/null; then
+  echo "option lists differ between --help and README:" >&2
+  diff <(echo "$opts_help") <(echo "$opts_readme") >&2 || true
+  exit 1
+fi
+echo "option lists in sync: $(echo "$opts_help" | wc -l) options"
+
+# The exit code tables: the same code numbers, both places.
+codes_help=$(./check_sources.sh --help | sed -n '/EXIT CODES:/,/^$/p' |
+  grep -oE '^\s+[0-9]+' | tr -d ' ' | sort -u)
+codes_readme=$(sed -n '/^## Exit Codes/,/^## /p' README.md |
+  grep -oE '^- \*\*[0-9]\*\*' | grep -oE '[0-9]' | sort -u)
+if ! diff <(echo "$codes_help") <(echo "$codes_readme") >/dev/null; then
+  echo "exit code tables differ between --help and README:" >&2
+  diff <(echo "$codes_help") <(echo "$codes_readme") >&2 || true
+  exit 1
+fi
+echo "exit code tables in sync: $(echo "$codes_help" | wc -l) codes"

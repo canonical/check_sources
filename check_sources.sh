@@ -637,11 +637,19 @@ _resolve_apt_version() {
     reported=$(apt-get --version 2>/dev/null | head -1 | awk '{print $2}') || reported=""
   fi
 
+  # Absence and garbage are different diagnoses: the first points at the
+  # environment (another shell's PATH, sudo, cron), the second at a
+  # transient like an upgrade replacing the tool mid-run. One message for
+  # both left a field report unanswerable, so each case says which it is,
+  # and the rejected output is quoted because "not parseable" without the
+  # output reproduces the same guessing game one level down.
   if [[ "$reported" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
     _APT_VERSION="$reported"
     _log "apt version from the local apt: $_APT_VERSION"
+  elif ! _command_exists apt-get; then
+    _log "No apt-get on PATH, using default version: $_APT_VERSION"
   else
-    _log "No local apt, using default version: $_APT_VERSION"
+    _log "apt-get output not parseable ('${reported}'), using default version: $_APT_VERSION"
   fi
 }
 
@@ -658,11 +666,14 @@ _resolve_containerd_version() {
       reported=""
   fi
 
+  # Same three-way split as the apt resolver, for the same reason.
   if [[ "$reported" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
     _CONTAINERD_VERSION="$reported"
     _log "containerd version from the local containerd: $_CONTAINERD_VERSION"
+  elif ! _command_exists containerd; then
+    _log "No containerd on PATH, using default version: $_CONTAINERD_VERSION"
   else
-    _log "No local containerd, using default version: $_CONTAINERD_VERSION"
+    _log "containerd output not parseable ('${reported}'), using default version: $_CONTAINERD_VERSION"
   fi
 }
 
