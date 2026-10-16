@@ -44,6 +44,19 @@ The cost is accepted on purpose: a script long enough that a real language would
 - **Color Aware Output**: Colors are disabled automatically when piped, when `NO_COLOR` is set, or with `--no-color`
 - **Reliable Parallel Mode**: Summary counts and exit code are correct with `--parallel`, and a failed source no longer aborts the run
 
+### What's New (v3.2.0)
+
+- **Container Registries**: A source can be an OCI image reference, probed with the `oci` profile: it resolves the manifest with an anonymous pull token, follows a multi-arch index to the amd64 manifest, and range-GETs the first 64 KiB of a layer. That crosses the registry to CDN to storage-backend path a real `docker pull` takes, which a `HEAD` on the host never reaches
+- **Five Registries Built In**: `public.ecr.aws`, `registry-1.docker.io`, `rocks.canonical.com`, `registry.k8s.io` and `quay.io`, each with an image a Canonical deployment genuinely pulls. A blocked `registry.k8s.io` stops a cluster coming up as surely as a blocked archive, so the list covers what a deployment consumes and not only what Canonical publishes
+- **Registry Failure Labels**: `MANIFEST<n>`, `NOMANIFEST`, `NOTOKEN`, `DENIED`, `RATELIMIT` and `RESET` say which step of the pull failed, so a throttled registry is not mistaken for a firewall rule
+- **HTTPS-Only Frontends**: `usn.ubuntu.com`, `jujucharms.com`, `jaas.ai` and `charmhub.io` are no longer checked over HTTP. Their addresses do not accept a connection on port 80, so those four entries failed on every healthy network for a path no client takes
+
+The built-in list goes from 46 URLs to 47. Both numbers moved: five registries were
+added and four HTTP entries were dropped. A run filtered with `--exclude` to skip the
+registries now yields 42 sources rather than 46, so a consumer counting records or
+matching the removed URLs needs updating. `--include`, `--exclude` and `--source` all
+work on registries, since they are ordinary entries in the list.
+
 ### What's New (v3.1.0)
 
 - **No Optional Math Dependency**: Elapsed times are computed in Bash arithmetic from `date`, so `bc` is no longer used. On the minimal images and containers where `bc` is absent, every source now reports a real timing instead of `N/A`
