@@ -374,6 +374,23 @@ The blob request is a ranged `GET` of the first 64 KiB rather than a whole layer
 it crosses the registry, CDN and storage path a real image pull takes without the
 cost of one. It only covers the CDN edge this run's source address was routed to.
 
+That path leaves the registry. Every one of the five redirects the blob to a
+separate delivery host, and `registry.k8s.io` redirects the manifest as well, to a
+region-specific host that differs by where the run is routed:
+
+| Registry               | Manifest reaches                    | Blob reaches                           |
+|------------------------|-------------------------------------|----------------------------------------|
+| `registry.k8s.io`      | `<region>-docker.pkg.dev`           | `cdn.registry.k8s.io`                  |
+| `quay.io`              | `quay.io`                           | `cdn01.quay.io`                        |
+| `ghcr.io`              | `ghcr.io`                           | `pkg-containers.githubusercontent.com` |
+| `public.ecr.aws`       | `public.ecr.aws`                    | a CloudFront distribution              |
+| `registry-1.docker.io` | `registry-1.docker.io`              | `production.cloudfront.docker.com`     |
+
+So the report names the host the probe ended on, not the reference that was given:
+that host is the one a firewall rule has to allow, and on a filtered network it is
+the one to investigate. A long signed CDN URL is shortened to its host in the text
+report, while the `json`, `csv` and `yaml` records carry it whole in `final_url`.
+
 These five sources cost two or three requests each, where every other source costs
 one, and they make a run depend on registries outside the deployment. To skip them:
 

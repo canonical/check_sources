@@ -447,7 +447,18 @@ _print_status() {
   # mentions it when the request actually moved somewhere else.
   local redirect_note=""
   if [[ "$redirect_count" -gt 0 ]] && [[ "$final_url" != "$url" ]]; then
-    redirect_note=" -> $final_url"
+    local shown="$final_url"
+    # A registry hands the blob to a CDN with a signed URL: one quay.io line
+    # came to 2659 characters, which is not a report any more. The host is
+    # the part an operator acts on, since it is what a firewall rule names,
+    # and the signature expires in minutes so the full URL is not reusable
+    # anyway. The machine-readable records keep it whole.
+    if [[ "$_OUTPUT_FORMAT" == "text" ]] && [[ "${#shown}" -gt "$_URL_WIDTH_MAX" ]]; then
+      local scheme="${shown%%://*}"
+      local rest="${shown#*://}"
+      shown="${scheme}://${rest%%/*}/..."
+    fi
+    redirect_note=" -> $shown"
   fi
 
   # One measurement, two renderings: the records keep the precision a consumer
@@ -1016,7 +1027,7 @@ _oci_resolve_blob() {
   local curl_cmd=(
     curl -s -m "$_TIMEOUT" --connect-timeout 5 -L --max-redirs "$_MAX_REDIRS"
     -D "$headers_file" -o "$body_file"
-    -w '%{http_code}\t%{ssl_verify_result}'
+    -w '%{http_code}\t%{ssl_verify_result}\t%{num_redirects}\t%{url_effective}'
     -A "$_USER_AGENT" -H "Accept: ${accept}"
   )
   [[ "$_INSECURE" == true ]] && curl_cmd+=(--insecure)
@@ -1026,7 +1037,11 @@ _oci_resolve_blob() {
   # and the only one that can meet a rejected certificate. The three that
   # follow reuse the same host and would fail identically, so there is
   # nothing to classify there.
-  local curl_out status_code verify_result=0
+  # Where the last request actually got to, carried out with every failure so
+  # the report can name it. Left empty when nothing was redirected, which
+  # keeps a result that never moved reading exactly as it did before.
+  local reached=""
+  local curl_out status_code verify_result=0 hops=0 final=""
   curl_out=$(timeout "$_TIMEOUT" "${curl_cmd[@]}" "$manifest_url" 2>/dev/null) || {
     # Read the status first: every command below overwrites $?. curl still
     # writes its -w fields when it fails, so the verification result is in
@@ -1034,6 +1049,8 @@ _oci_resolve_blob() {
     local curl_exit=$?
     local fail_label
     fail_label=$(_curl_error_label "$curl_exit")
+    IFS=$'\t' read -r _ _ hops final <<<"$curl_out" || true
+    [[ "${hops:-0}" -gt 0 ]] && reached="$final"
     if [[ $curl_exit -eq 60 ]]; then
       local reject_reason=0 probe_exit=0
       IFS=$'\t' read -r _ reject_reason <<<"$curl_out" || true
@@ -1046,11 +1063,12 @@ _oci_resolve_blob() {
       fi
     fi
     rm -f "$headers_file" "$body_file"
-    echo "||$fail_label"
+    echo "||$fail_label|${hops:-0}|$reached"
     return 1
   }
-  IFS=$'\t' read -r status_code verify_result <<<"$curl_out" || true
-  : "${status_code:=}" "${verify_result:=0}"
+  IFS=$'\t' read -r status_code verify_result hops final <<<"$curl_out" || true
+  : "${status_code:=}" "${verify_result:=0}" "${hops:=0}"
+  [[ "$hops" -gt 0 ]] && reached="$final"
 
   # ghcr.io (and most Docker Hub-style registries) answer an unauthenticated
   # manifest GET with 401 plus a Bearer realm/service/scope to request a
@@ -1072,7 +1090,7 @@ _oci_resolve_blob() {
     scope=$(echo "$www_auth" | grep -oP 'scope="\K[^"]+') || scope=""
 
     if [[ -z "$realm" ]]; then
-      echo "||NOAUTH"
+      echo "||NOAUTH|${hops:-0}|${reached}"
       return 1
     fi
 
@@ -1097,7 +1115,7 @@ _oci_resolve_blob() {
     pull_token=${pull_token%%$'\n'*}
 
     if [[ -z "$pull_token" ]]; then
-      echo "||NOTOKEN"
+      echo "||NOTOKEN|${hops:-0}|${reached}"
       return 1
     fi
 
@@ -1106,23 +1124,24 @@ _oci_resolve_blob() {
     # the verification result the same way.
     curl_out=$(timeout "$_TIMEOUT" "${curl_cmd[@]}" -H "$auth_field" "$manifest_url" 2>/dev/null) || {
       local retry_exit=$?
-      echo "||$(_curl_error_label "$retry_exit")"
+      echo "||$(_curl_error_label "$retry_exit")|${hops:-0}|${reached}"
       return 1
     }
-    IFS=$'\t' read -r status_code verify_result <<<"$curl_out" || true
-    : "${status_code:=}"
+    IFS=$'\t' read -r status_code verify_result hops final <<<"$curl_out" || true
+    : "${status_code:=}" "${hops:=0}"
+    [[ "$hops" -gt 0 ]] && reached="$final"
   fi
 
   # A rate limit is not a blocked path. These registries throttle anonymous
   # pulls, and probes run concurrently, so saying so by name keeps an
   # operator from hunting a firewall rule that does not exist.
   if [[ "$status_code" == "429" ]]; then
-    echo "||RATELIMIT"
+    echo "||RATELIMIT|${hops:-0}|${reached}"
     return 1
   fi
 
   if [[ ! "$status_code" =~ ^2[0-9][0-9]$ ]]; then
-    echo "||MANIFEST$status_code"
+    echo "||MANIFEST$status_code|${hops:-0}|${reached}"
     return 1
   fi
 
@@ -1158,14 +1177,18 @@ _oci_resolve_blob() {
     local hop_file hop_status
     hop_file=$(mktemp "${_TMPDIR}/oci-arch.XXXXXX")
     local arch_curl=(curl -s -m "$_TIMEOUT" --connect-timeout 5 -L --max-redirs "$_MAX_REDIRS"
-      -o "$hop_file" -w '%{http_code}' -A "$_USER_AGENT" -H "Accept: ${accept}")
+      -o "$hop_file" -w '%{http_code}\t%{num_redirects}\t%{url_effective}'
+      -A "$_USER_AGENT" -H "Accept: ${accept}")
     [[ "$_INSECURE" == true ]] && arch_curl+=(--insecure)
     [[ -n "$auth_field" ]] && arch_curl+=(-H "$auth_field")
     [[ -n "$_PROXY_URL" ]] && arch_curl+=(--proxy "$_PROXY_URL")
 
-    local hop_exit=0
-    hop_status=$(timeout "$_TIMEOUT" "${arch_curl[@]}" \
+    local hop_exit=0 hop_out=""
+    hop_out=$(timeout "$_TIMEOUT" "${arch_curl[@]}" \
       "${registry}/v2/${repository}/manifests/${digest}" 2>/dev/null) || hop_exit=$?
+    IFS=$'\t' read -r hop_status hops final <<<"$hop_out" || true
+    : "${hops:=0}"
+    [[ "$hops" -gt 0 ]] && reached="$final"
 
     # No response at all is a network outcome, not a manifest outcome, so it
     # gets the same label the first manifest request would have given it.
@@ -1173,19 +1196,19 @@ _oci_resolve_blob() {
     # happened on the wire, which is the one thing this report must not do.
     if (( hop_exit != 0 )) || [[ -z "$hop_status" ]]; then
       rm -f "$hop_file"
-      echo "||$(_curl_error_label "$hop_exit")"
+      echo "||$(_curl_error_label "$hop_exit")|${hops:-0}|${reached}"
       return 1
     fi
 
     if [[ "$hop_status" == "429" ]]; then
       rm -f "$hop_file"
-      echo "||RATELIMIT"
+      echo "||RATELIMIT|${hops:-0}|${reached}"
       return 1
     fi
 
     if [[ ! "$hop_status" =~ ^2[0-9][0-9]$ ]]; then
       rm -f "$hop_file"
-      echo "||MANIFEST${hop_status}"
+      echo "||MANIFEST${hop_status}|${hops:-0}|${reached}"
       return 1
     fi
 
@@ -1200,11 +1223,11 @@ _oci_resolve_blob() {
   size=$(grep -oP '"size"\s*:\s*\K[0-9]+' "$body_file" | tail -1) || size=""
 
   if [[ -z "$digest" ]]; then
-    echo "||NOMANIFEST"
+    echo "||NOMANIFEST|${hops:-0}|${reached}"
     return 1
   fi
 
-  echo "${digest}|${size:-0}|${auth_field}"
+  echo "${digest}|${size:-0}|${auth_field}|0|"
   return 0
 }
 
@@ -1214,41 +1237,58 @@ _oci_resolve_blob() {
 _oci_probe_once() {
   local registry="$1" repository="$2" tag="$3"
 
-  local digest size auth_field
-  IFS='|' read -r digest size auth_field < <(_oci_resolve_blob "$registry" "$repository" "$tag")
+  # The manifest step reports where it got to as well: registry.k8s.io sends
+  # that request to a region-specific host, so its failure is not about the
+  # reference that was typed either.
+  # Tab is an IFS whitespace character, so read collapses a run of them: an
+  # empty field in the middle of the record below would shift every field
+  # after it. The possibly-empty one is last for that reason. The pipe that
+  # _oci_resolve_blob uses is not whitespace, so its empty fields survive.
+  local digest size auth_field reached mhops
+  IFS='|' read -r digest size auth_field mhops reached \
+    < <(_oci_resolve_blob "$registry" "$repository" "$tag")
 
   if [[ -z "$digest" ]]; then
-    printf 'FAILED\t%s\t\n' "${auth_field:-MANIFEST}"
+    printf 'FAILED\t%s\t%s\t%s\n' "${auth_field:-MANIFEST}" "${mhops:-0}" "$reached"
     return 0
   fi
 
   local blob_url="${registry}/v2/${repository}/blobs/${digest}"
   local curl_cmd=(
     curl -s -m "$_TIMEOUT" --connect-timeout 5 -L --max-redirs "$_MAX_REDIRS"
-    -o /dev/null -w '%{http_code}\t%{size_download}'
+    -o /dev/null -w '%{http_code}\t%{size_download}\t%{num_redirects}\t%{url_effective}'
     -A "$_USER_AGENT" -H "Range: bytes=0-65535"
   )
   [[ "$_INSECURE" == true ]] && curl_cmd+=(--insecure)
   [[ -n "$auth_field" ]] && curl_cmd+=(-H "$auth_field")
   [[ -n "$_PROXY_URL" ]] && curl_cmd+=(--proxy "$_PROXY_URL")
 
-  local curl_out status_code bytes
+  # Every registry checked redirects this request to a delivery host, so the
+  # URL that was asked for is almost never the one that answered. Reporting
+  # the registry would send an operator to a host that is working.
+  local curl_out status_code bytes hops=0 final="$blob_url"
   curl_out=$(timeout "$_TIMEOUT" "${curl_cmd[@]}" "$blob_url" 2>/dev/null) || {
     # Read the status first: every command below, including an assignment,
-    # overwrites $? and would turn the real failure into ERR0.
+    # overwrites $? and would turn the real failure into ERR0. curl still
+    # writes its -w fields when it fails, so the host it had reached when it
+    # broke is in curl_out.
     local curl_exit=$?
-    printf 'FAILED\t%s\t%s\n' "$(_curl_error_label "$curl_exit")" "$blob_url"
+    local fail_label
+    fail_label=$(_curl_error_label "$curl_exit")
+    IFS=$'\t' read -r _ _ hops final <<<"$curl_out" || true
+    printf 'FAILED\t%s\t%s\t%s\n' "$fail_label" "${hops:-0}" "${final:-$blob_url}"
     return 0
   }
 
-  IFS=$'\t' read -r status_code bytes <<<"$curl_out"
+  IFS=$'\t' read -r status_code bytes hops final <<<"$curl_out"
+  : "${hops:=0}" "${final:=$blob_url}"
 
   # 206 is the expected answer to a Range request; some origins ignore the
   # range and send 200 with the whole blob instead, which still proves the
   # path works. Either is fine as long as bytes actually arrived: a reset
   # mid-transfer leaves status_code empty or stalls size_download at 0.
   if [[ "$status_code" =~ ^(200|206)$ ]] && [[ "${bytes:-0}" -gt 0 ]]; then
-    printf 'OK\t%s\t%s\n' "$status_code" "$blob_url"
+    printf 'OK\t%s\t%s\t%s\n' "$status_code" "$hops" "$final"
     return 0
   fi
 
@@ -1256,7 +1296,7 @@ _oci_probe_once() {
   if [[ "$status_code" == "429" ]]; then
     fail_code="RATELIMIT"
   fi
-  printf 'FAILED\t%s\t%s\n' "$fail_code" "$blob_url"
+  printf 'FAILED\t%s\t%s\t%s\n' "$fail_code" "$hops" "$final"
   return 0
 }
 
@@ -1295,14 +1335,14 @@ _check_oci_source() {
   local start_time end_time elapsed_ns
   start_time=$(date +%s%N)
 
-  local attempt=1 verdict code target
+  local attempt=1 verdict code hops target
   while [[ $attempt -le $_RETRIES ]]; do
     if [[ $attempt -gt 1 ]]; then
       _log "Retry attempt $attempt for $label"
       sleep 1
     fi
 
-    IFS=$'\t' read -r verdict code target \
+    IFS=$'\t' read -r verdict code hops target \
       < <(_oci_probe_once "$registry" "$repository" "$tag")
 
     [[ "$verdict" == "OK" ]] && break
@@ -1313,15 +1353,15 @@ _check_oci_source() {
 
   end_time=$(date +%s%N)
   elapsed_ns=$((end_time - start_time))
-  : "${target:=$label}"
+  : "${target:=$label}" "${hops:=0}"
 
   if [[ "$verdict" == "OK" ]]; then
-    _print_status "OK" "$code" "$label" "$elapsed_ns" "$target" 0
+    _print_status "OK" "$code" "$label" "$elapsed_ns" "$target" "$hops"
     _record_result "OK" "$label" "$code"
     return 0
   fi
 
-  _print_status "FAILED" "$code" "$label" "$elapsed_ns" "$target" 0
+  _print_status "FAILED" "$code" "$label" "$elapsed_ns" "$target" "$hops"
   _record_result "FAILED" "$label" "$code"
   return 1
 }
@@ -1545,7 +1585,14 @@ PROBE PROFILES:
              source is written as an OCI reference,
              scheme://registry/repository:tag, so --source can point at an
              internal registry. It covers the CDN edge this run's source
-             address was routed to, not every edge a real pull might hit
+             address was routed to, not every edge a real pull might hit.
+             Registries redirect the blob, and sometimes the manifest, to a
+             separate delivery host, so the report names where the probe
+             ended rather than the reference that was given. That host is
+             what a firewall rule has to allow, and for registry.k8s.io it
+             depends on the region the run is routed to. A long signed CDN
+             URL is shortened to its host in the text report; the json, csv
+             and yaml records carry it whole
 
 HEREDOC
 }
