@@ -44,6 +44,15 @@ The cost is accepted on purpose: a script long enough that a real language would
 - **Color Aware Output**: Colors are disabled automatically when piped, when `NO_COLOR` is set, or with `--no-color`
 - **Reliable Parallel Mode**: Summary counts and exit code are correct with `--parallel`, and a failed source no longer aborts the run
 
+### Fixed in v3.2.1
+
+- **Registry Swap**: `rocks.canonical.com` is replaced by `ghcr.io/canonical/metrics-server:0.7.2-ck7`. Canonical has made the ROCKs registry a temporary service, to be retired in early 2027, with `ghcr.io/canonical/cdk` the supported registry from Charmed Kubernetes 1.36 on. It was also the one source that failed a healthy run: about four times slower than any other registry, which with five requests per probe put it over the timeout in 3 of 10 parallel runs
+- **Corrected Label List**: `DENIED` was documented as a failure label but is never emitted. A rejected pull token reports `NOTOKEN`
+
+The URL count is unchanged at 47, since one registry replaced another. The
+`--exclude` pattern that skips the registries changes: `rocks\.canonical` becomes
+`ghcr\.io`.
+
 ### What's New (v3.2.0)
 
 - **Container Registries**: A source can be an OCI image reference, probed with the `oci` profile: it resolves the manifest with an anonymous pull token, follows a multi-arch index to the amd64 manifest, and range-GETs the first 64 KiB of a layer. That crosses the registry to CDN to storage-backend path a real `docker pull` takes, which a `HEAD` on the host never reaches
