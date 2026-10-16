@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck bats busybox
+
+      - name: Lint
+        run: |
+          shellcheck check_sources.sh tests/check_label_sync.sh tests/helpers.bash
+          bash -n check_sources.sh
+
+      - name: Offline test suite
+        # The live-tagged tests stay off in CI on purpose: they depend on
+        # five external registries and must never turn CI red for a reason
+        # no commit caused. CHECK_SOURCES_LIVE=1 runs them by hand.
+        run: bats tests/

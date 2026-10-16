@@ -243,6 +243,29 @@ The `yaml` format uses a single-line flow mapping per record rather than a block
 mapping, so that records from different sources never interleave in `--parallel`
 mode. It parses to the same structure either way.
 
+## Testing
+
+The bats suite in `tests/` runs offline against local stub servers, so it needs no
+network and no reachable registry:
+
+```bash
+bats tests/
+```
+
+Two tests probe the real registries and the full built-in list; they are for
+release checks and stay skipped unless asked for:
+
+```bash
+CHECK_SOURCES_LIVE=1 bats tests/live.bats
+```
+
+`tests/check_label_sync.sh` fails when the failure label lists in `--help`, the
+README table and the script drift apart; it runs as part of the suite and in CI.
+
+The suite needs `bats` and `python3` (for the stub servers), and uses `busybox`
+where installed to prove the script runs on a minimal grep. These are development
+dependencies only; the script itself still needs nothing beyond the list below.
+
 ## Dependencies
 
 - `curl` - for HTTP/HTTPS connectivity testing
