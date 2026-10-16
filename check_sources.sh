@@ -400,7 +400,7 @@ _check_dependencies() {
   if [[ ${#missing_deps[@]} -gt 0 ]]; then
     _print_color "$_RED" "ERROR: Missing required dependencies: ${missing_deps[*]}"
     _print_color "$_YELLOW" "Please install the missing dependencies and try again."
-    exit 1
+    exit 2
   fi
 }
 
@@ -410,7 +410,7 @@ _validate_proxy() {
   if [[ ! "$proxy" =~ ^https?://[^/]+:[0-9]+/?$ ]]; then
     _print_color "$_RED" "ERROR: Invalid proxy URL format: $proxy"
     _print_color "$_YELLOW" "Expected format: http://host:port or https://host:port"
-    exit 1
+    exit 2
   fi
 }
 
