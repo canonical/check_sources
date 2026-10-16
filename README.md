@@ -191,6 +191,10 @@ Colored output is used only when standard output is a terminal. It is turned off
 -u, --user-agent STRING Set custom User-Agent header. Applies to profiled
                         probes too, so it can defeat the request fingerprint
                         a profile depends on
+-k, --insecure          Do not verify server certificates. Suppresses a real
+                        failure rather than working around a false one: a
+                        source whose certificate this machine rejects is one
+                        apt, docker and juju cannot use either
 -R, --release CODENAME  Release codename substituted for {codename} in a
                         profiled source path (default: VERSION_CODENAME from
                         /etc/os-release). Sources needing one are skipped when
@@ -423,22 +427,42 @@ reason, since a PPA index path needs an owner and an archive name.
 
 When a source returns no usable HTTP response, the code column shows a short label derived from the curl exit status instead of an HTTP code. `NOINDEX` and `NOBODY` are the exception: they mark a response that did arrive but is not usable. The same label appears in the text, JSON, CSV, and YAML output and in the failed sources list of the summary.
 
-| Label         | Meaning                                                       | curl exit code            |
-|---------------|---------------------------------------------------------------|---------------------------|
-| `TIMEOUT`     | No response within the configured timeout                     | 28, or 124 from `timeout` |
-| `DNS`         | Hostname could not be resolved                                | 6                         |
-| `REFUSED`     | Connection refused or could not be established                | 7                         |
-| `TLS`         | TLS handshake or certificate error                            | 35, 60                    |
-| `REDIRS`      | More than 10 redirects, or a redirect loop                    | 47                        |
-| `NOINDEX`     | Profiled probe: client error on the index path                | none, a response arrived  |
-| `NOBODY`      | Profiled probe: response is not what the application wants    | none, a response arrived  |
-| `MANIFEST<n>` | `oci`: registry answered the manifest with status `<n>`       | none, a response arrived  |
-| `NOAUTH`      | `oci`: auth demanded but no usable realm in the challenge     | none, a response arrived  |
-| `NOTOKEN`     | `oci`: the token endpoint returned no usable token            | none, a response arrived  |
-| `NOMANIFEST`  | `oci`: manifest arrived with no parseable blob digest         | none, a response arrived  |
-| `RATELIMIT`   | `oci`: the registry throttled the request, not a blocked path | none, a response arrived  |
-| `RESET`       | `oci`: blob request returned no bytes                         | none, a response arrived  |
-| `ERR<n>`      | Any other curl failure, where `<n>` is the curl exit code     | other                     |
+Certificates are verified by default, against the same trust store `apt`, `docker`
+and `juju` use. When verification fails, one further request is made with
+verification off, and a `CERT*` label means that second request succeeded: the
+network path is open and the certificate is the obstacle. When nothing answers
+either way, the ordinary network label is reported instead, because the
+certificate is not what stopped it.
+
+`CERTUNTRUSTED` on a corporate network usually means a proxy re-signing traffic
+with a CA that is not in the machine's trust store. The label names what was
+observed rather than that conclusion, since a host can serve a self-signed
+certificate on its own. Installing the proxy CA is the fix; `--insecure` is the
+escape hatch, and it suppresses a real failure rather than a false one.
+
+Revocation is not checked, because `curl` does not check it by default, so a
+revoked certificate still verifies.
+
+| Label           | Meaning                                                       | curl exit code            |
+|-----------------|---------------------------------------------------------------|---------------------------|
+| `TIMEOUT`       | No response within the configured timeout                     | 28, or 124 from `timeout` |
+| `DNS`           | Hostname could not be resolved                                | 6                         |
+| `REFUSED`       | Connection refused or could not be established                | 7                         |
+| `TLS`           | TLS handshake failed, with no certificate to judge            | 35                        |
+| `CERTEXPIRED`   | The certificate has expired                                   | 60                        |
+| `CERTNAME`      | The certificate does not cover the host asked for             | 60                        |
+| `CERTUNTRUSTED` | The chain does not reach a root this machine trusts           | 60                        |
+| `CERT<n>`       | Any other verification failure, `<n>` is the OpenSSL code     | 60                        |
+| `REDIRS`        | More than 10 redirects, or a redirect loop                    | 47                        |
+| `NOINDEX`       | Profiled probe: client error on the index path                | none, a response arrived  |
+| `NOBODY`        | Profiled probe: response is not what the application wants    | none, a response arrived  |
+| `MANIFEST<n>`   | `oci`: registry answered the manifest with status `<n>`       | none, a response arrived  |
+| `NOAUTH`        | `oci`: auth demanded but no usable realm in the challenge     | none, a response arrived  |
+| `NOTOKEN`       | `oci`: the token endpoint returned no usable token            | none, a response arrived  |
+| `NOMANIFEST`    | `oci`: manifest arrived with no parseable blob digest         | none, a response arrived  |
+| `RATELIMIT`     | `oci`: the registry throttled the request, not a blocked path | none, a response arrived  |
+| `RESET`         | `oci`: blob request returned no bytes                         | none, a response arrived  |
+| `ERR<n>`        | Any other curl failure, where `<n>` is the curl exit code     | other                     |
 
 Example:
 

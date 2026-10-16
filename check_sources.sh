@@ -74,6 +74,12 @@ _LOG_FILE=""
 _USER_AGENT="check_sources/${_VERSION}"
 _PROXY_URL=""
 
+# Set by --insecure. Certificates are verified by default, against the same
+# trust store apt, docker and juju use, because a source they cannot open is
+# not one this report may call reachable. The flag turns verification off for
+# the whole run, which suppresses a real failure rather than a false one.
+_INSECURE=false
+
 # Shown in place of an elapsed time that could not be measured, which happens
 # when date does not support nanosecond output.
 _UNMEASURED="N/A"
@@ -774,6 +780,26 @@ _curl_error_label() {
   esac
 }
 
+# Why the certificate was rejected, read from curl's %{ssl_verify_result} on
+# the attempt that verified. The codes are OpenSSL's and were confirmed
+# against the badssl.com hosts; the field is only meaningful on a verifying
+# attempt, since under --insecure curl reports 20 even for a good
+# certificate.
+#
+# 18, 19 and 20 all mean the chain does not lead to a trusted root, which on
+# a corporate network is usually a proxy re-signing traffic with a CA the
+# machine does not have. The label says what was seen and not what caused
+# it: a host can serve a self-signed certificate on its own, so naming a
+# proxy here would be a guess presented as a finding.
+_cert_error_label() {
+  case "$1" in
+    1)        echo "CERTNAME" ;;
+    10)       echo "CERTEXPIRED" ;;
+    18|19|20) echo "CERTUNTRUSTED" ;;
+    *)        echo "CERT$1" ;;
+  esac
+}
+
 _check_single_source() {
   local entry="$1"
   local url profile
@@ -844,11 +870,12 @@ _check_single_source() {
     local curl_cmd=(
       curl
       -s -m "$_TIMEOUT" -o "$body_target"
-      -w '%{http_code}\t%{num_redirects}\t%{url_effective}'
-      --insecure -L --max-redirs "$_MAX_REDIRS"
+      -w '%{http_code}\t%{num_redirects}\t%{url_effective}\t%{ssl_verify_result}'
+      -L --max-redirs "$_MAX_REDIRS"
       -A "$user_agent"
       --connect-timeout 5
     )
+    [[ "$_INSECURE" == true ]] && curl_cmd+=(--insecure)
 
     # HEAD is the generic probe. A profile asking for anything else wants the
     # response body, so the method is set rather than -I.
@@ -882,10 +909,31 @@ _check_single_source() {
     status_code=""
     redirect_count=0
     final_url="$url"
-    IFS=$'\t' read -r status_code redirect_count final_url <<<"$curl_out" || true
-    : "${status_code:=}" "${redirect_count:=0}" "${final_url:=$url}"
+    local verify_result=0
+    IFS=$'\t' read -r status_code redirect_count final_url verify_result <<<"$curl_out" || true
+    : "${status_code:=}" "${redirect_count:=0}" "${final_url:=$url}" "${verify_result:=0}"
 
     if [[ $curl_exit -eq 0 ]] && [[ "$status_code" =~ ^[0-9]+$ ]] && [[ "$status_code" != "000" ]]; then
+      break
+    fi
+
+    # Exit 60 is a rejected certificate, and the certificate will be the same
+    # on a second attempt, so this does not go round the retry loop. One
+    # further request with verification off answers the question the first
+    # one cannot: whether anything is listening behind that certificate. If
+    # something is, the path is open and the certificate is the obstacle; if
+    # nothing is, the certificate was never what stopped us and the network
+    # label is the honest one.
+    if [[ $curl_exit -eq 60 ]]; then
+      local probe_exit=0
+      timeout "$_TIMEOUT" "${curl_cmd[@]}" --insecure >/dev/null 2>&1 || probe_exit=$?
+      if [[ $probe_exit -eq 0 ]]; then
+        status_code=$(_cert_error_label "$verify_result")
+      else
+        status_code=$(_curl_error_label "$probe_exit")
+      fi
+      redirect_count=0
+      final_url="$url"
       break
     fi
 
@@ -966,19 +1014,43 @@ _oci_resolve_blob() {
   body_file=$(mktemp "${_TMPDIR}/oci-body.XXXXXX")
 
   local curl_cmd=(
-    curl -s -m "$_TIMEOUT" --connect-timeout 5 --insecure -L --max-redirs "$_MAX_REDIRS"
+    curl -s -m "$_TIMEOUT" --connect-timeout 5 -L --max-redirs "$_MAX_REDIRS"
     -D "$headers_file" -o "$body_file"
-    -w '%{http_code}'
+    -w '%{http_code}\t%{ssl_verify_result}'
     -A "$_USER_AGENT" -H "Accept: ${accept}"
   )
+  [[ "$_INSECURE" == true ]] && curl_cmd+=(--insecure)
   [[ -n "$_PROXY_URL" ]] && curl_cmd+=(--proxy "$_PROXY_URL")
 
-  local status_code
-  status_code=$(timeout "$_TIMEOUT" "${curl_cmd[@]}" "$manifest_url" 2>/dev/null) || {
+  # This is the first request of the probe, so it is where TLS is established
+  # and the only one that can meet a rejected certificate. The three that
+  # follow reuse the same host and would fail identically, so there is
+  # nothing to classify there.
+  local curl_out status_code verify_result=0
+  curl_out=$(timeout "$_TIMEOUT" "${curl_cmd[@]}" "$manifest_url" 2>/dev/null) || {
+    # Read the status first: every command below overwrites $?. curl still
+    # writes its -w fields when it fails, so the verification result is in
+    # curl_out even though the request did not complete.
     local curl_exit=$?
-    echo "||$(_curl_error_label "$curl_exit")"
+    local fail_label
+    fail_label=$(_curl_error_label "$curl_exit")
+    if [[ $curl_exit -eq 60 ]]; then
+      local reject_reason=0 probe_exit=0
+      IFS=$'\t' read -r _ reject_reason <<<"$curl_out" || true
+      timeout "$_TIMEOUT" "${curl_cmd[@]}" --insecure "$manifest_url" >/dev/null 2>&1 ||
+        probe_exit=$?
+      if [[ $probe_exit -eq 0 ]]; then
+        fail_label=$(_cert_error_label "${reject_reason:-0}")
+      else
+        fail_label=$(_curl_error_label "$probe_exit")
+      fi
+    fi
+    rm -f "$headers_file" "$body_file"
+    echo "||$fail_label"
     return 1
   }
+  IFS=$'\t' read -r status_code verify_result <<<"$curl_out" || true
+  : "${status_code:=}" "${verify_result:=0}"
 
   # ghcr.io (and most Docker Hub-style registries) answer an unauthenticated
   # manifest GET with 401 plus a Bearer realm/service/scope to request a
@@ -1017,8 +1089,9 @@ _oci_resolve_blob() {
     # Docker's registry returns both "token" and "access_token", the ECR one
     # returns only "token", which is why this needs the first match rather
     # than the only match.
-    pull_token=$(curl -s -m "$_TIMEOUT" --connect-timeout 5 \
-      -A "$_USER_AGENT" \
+    local token_curl=(curl -s -m "$_TIMEOUT" --connect-timeout 5 -A "$_USER_AGENT")
+    [[ "$_INSECURE" == true ]] && token_curl+=(--insecure)
+    pull_token=$("${token_curl[@]}" \
       "${realm}?service=${service}&scope=${scope}" 2>/dev/null |
       grep -oP '"(token|access_token)"\s*:\s*"\K[^"]+') || pull_token=""
     pull_token=${pull_token%%$'\n'*}
@@ -1029,11 +1102,15 @@ _oci_resolve_blob() {
     fi
 
     auth_field="Authorization: Bearer ${pull_token}"
-    status_code=$(timeout "$_TIMEOUT" "${curl_cmd[@]}" -H "$auth_field" "$manifest_url" 2>/dev/null) || {
+    # Same -w fields as the first attempt, so the status has to be split off
+    # the verification result the same way.
+    curl_out=$(timeout "$_TIMEOUT" "${curl_cmd[@]}" -H "$auth_field" "$manifest_url" 2>/dev/null) || {
       local retry_exit=$?
       echo "||$(_curl_error_label "$retry_exit")"
       return 1
     }
+    IFS=$'\t' read -r status_code verify_result <<<"$curl_out" || true
+    : "${status_code:=}"
   fi
 
   # A rate limit is not a blocked path. These registries throttle anonymous
@@ -1080,8 +1157,9 @@ _oci_resolve_blob() {
     # status is a manifest status like any other, so it is reported as one.
     local hop_file hop_status
     hop_file=$(mktemp "${_TMPDIR}/oci-arch.XXXXXX")
-    local arch_curl=(curl -s -m "$_TIMEOUT" --connect-timeout 5 --insecure -L --max-redirs "$_MAX_REDIRS"
+    local arch_curl=(curl -s -m "$_TIMEOUT" --connect-timeout 5 -L --max-redirs "$_MAX_REDIRS"
       -o "$hop_file" -w '%{http_code}' -A "$_USER_AGENT" -H "Accept: ${accept}")
+    [[ "$_INSECURE" == true ]] && arch_curl+=(--insecure)
     [[ -n "$auth_field" ]] && arch_curl+=(-H "$auth_field")
     [[ -n "$_PROXY_URL" ]] && arch_curl+=(--proxy "$_PROXY_URL")
 
@@ -1146,10 +1224,11 @@ _oci_probe_once() {
 
   local blob_url="${registry}/v2/${repository}/blobs/${digest}"
   local curl_cmd=(
-    curl -s -m "$_TIMEOUT" --connect-timeout 5 --insecure -L --max-redirs "$_MAX_REDIRS"
+    curl -s -m "$_TIMEOUT" --connect-timeout 5 -L --max-redirs "$_MAX_REDIRS"
     -o /dev/null -w '%{http_code}\t%{size_download}'
     -A "$_USER_AGENT" -H "Range: bytes=0-65535"
   )
+  [[ "$_INSECURE" == true ]] && curl_cmd+=(--insecure)
   [[ -n "$auth_field" ]] && curl_cmd+=(-H "$auth_field")
   [[ -n "$_PROXY_URL" ]] && curl_cmd+=(--proxy "$_PROXY_URL")
 
@@ -1367,6 +1446,12 @@ OPTIONS:
     -u, --user-agent STRING Set custom User-Agent (default: $_USER_AGENT).
                             Applies to profiled probes too, so it can defeat
                             the request fingerprint a profile depends on
+    -k, --insecure          Do not verify server certificates. This suppresses
+                            a real failure rather than working around a false
+                            one: a source whose certificate this machine
+                            rejects is one apt, docker and juju cannot use
+                            either. Intended for a network that intercepts
+                            TLS with a CA that is not installed yet
     -R, --release CODENAME  Release codename substituted for {codename} in a
                             profiled source path (default: VERSION_CODENAME
                             from /etc/os-release). Sources needing one are
@@ -1407,7 +1492,7 @@ FAILURE LABELS:
     TIMEOUT  No response within the timeout
     DNS      Hostname could not be resolved
     REFUSED  Connection refused or could not be established
-    TLS      TLS handshake or certificate error
+    TLS      TLS handshake failed, with no certificate to judge
     REDIRS   More than $_MAX_REDIRS redirects, or a redirect loop
     NOINDEX  Profiled probe only: the index path answered with a client
              error, so the path or the --release codename is wrong rather
@@ -1415,6 +1500,22 @@ FAILURE LABELS:
     NOBODY   Profiled probe only: the response arrived but is not what the
              application expects, such as a block page served with 200
     ERR<n>   Any other curl failure, <n> is the curl exit code
+
+    Certificates are verified by default. When verification fails, one
+    further request is made with verification off: these labels mean the
+    host answered that second request, so the path is open and the
+    certificate is the obstacle. When it does not answer either, the
+    ordinary network label above is reported instead.
+    CERTEXPIRED   The certificate has expired
+    CERTNAME      The certificate does not cover the host that was asked for
+    CERTUNTRUSTED The chain does not reach a root this machine trusts. On a
+                  corporate network this usually means a proxy re-signing
+                  traffic with a CA that is not installed, though a host can
+                  also serve a self-signed certificate on its own
+    CERT<n>       Any other verification failure, <n> is the OpenSSL code
+
+    Revocation is not checked, because curl does not check it by default,
+    so a revoked certificate still verifies.
 
     oci profile only, shown in place of the usual codes:
     MANIFEST<n> The registry answered the manifest request with status <n>
@@ -1573,6 +1674,10 @@ _parse_options() {
       ;;
     --no-color)
       _disable_colors
+      shift
+      ;;
+    -k | --insecure)
+      _INSECURE=true
       shift
       ;;
     http://* | https://*)
