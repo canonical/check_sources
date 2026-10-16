@@ -44,6 +44,15 @@ The cost is accepted on purpose: a script long enough that a real language would
 - **Color Aware Output**: Colors are disabled automatically when piped, when `NO_COLOR` is set, or with `--no-color`
 - **Reliable Parallel Mode**: Summary counts and exit code are correct with `--parallel`, and a failed source no longer aborts the run
 
+### Fixed in v4.0.1
+
+- **Resolver Logs Say Which Failure**: The verbose log distinguishes a version
+  tool missing from PATH from one that answered with something unparseable, and
+  quotes the rejected output in the second case. One message covered both, which
+  left a field report unanswerable when the same machine flipped between them
+  during an unattended upgrade. Which version gets used is unchanged in every
+  case
+
 ### What's New (v4.0.0)
 
 - **Certificate Verification**: Probes verify server certificates by default,
