@@ -1076,8 +1076,19 @@ _oci_resolve_blob() {
     [[ -n "$auth_field" ]] && arch_curl+=(-H "$auth_field")
     [[ -n "$_PROXY_URL" ]] && arch_curl+=(--proxy "$_PROXY_URL")
 
+    local hop_exit=0
     hop_status=$(timeout "$_TIMEOUT" "${arch_curl[@]}" \
-      "${registry}/v2/${repository}/manifests/${digest}" 2>/dev/null) || hop_status=""
+      "${registry}/v2/${repository}/manifests/${digest}" 2>/dev/null) || hop_exit=$?
+
+    # No response at all is a network outcome, not a manifest outcome, so it
+    # gets the same label the first manifest request would have given it.
+    # Collapsing it into MANIFESTERR named our own step for a timeout that
+    # happened on the wire, which is the one thing this report must not do.
+    if (( hop_exit != 0 )) || [[ -z "$hop_status" ]]; then
+      rm -f "$hop_file"
+      echo "||$(_curl_error_label "$hop_exit")"
+      return 1
+    fi
 
     if [[ "$hop_status" == "429" ]]; then
       rm -f "$hop_file"
@@ -1087,7 +1098,7 @@ _oci_resolve_blob() {
 
     if [[ ! "$hop_status" =~ ^2[0-9][0-9]$ ]]; then
       rm -f "$hop_file"
-      echo "||MANIFEST${hop_status:-ERR}"
+      echo "||MANIFEST${hop_status}"
       return 1
     fi
 
@@ -1110,33 +1121,18 @@ _oci_resolve_blob() {
   return 0
 }
 
-# Check one "registry|repository|tag" OCI entry: resolve the manifest, then
-# GET the first 64 KiB of the heaviest blob with a Range header. A partial
-# GET is enough to cross the registry -> CDN -> storage-backend path a real
-# image pull takes without downloading whole layers, and it reproduces the
-# failure the oci profile exists for: a reset partway through a blob
-# transfer, which a HEAD or a manifest-only GET never triggers.
-_check_oci_source() {
+# One attempt: resolve the blob, then range-GET it. Prints nothing and
+# records nothing, so the caller can discard a transient attempt and try
+# again. Echoes "verdict<TAB>code<TAB>url".
+_oci_probe_once() {
   local registry="$1" repository="$2" tag="$3"
-  # The source URL as declared, which is already the reference these three
-  # were taken from, so the report shows what an operator would retype.
-  local label="$4"
-
-  _log "Checking: $label (profile: oci)"
-
-  local start_time end_time elapsed_ns
-  start_time=$(date +%s%N)
 
   local digest size auth_field
   IFS='|' read -r digest size auth_field < <(_oci_resolve_blob "$registry" "$repository" "$tag")
 
   if [[ -z "$digest" ]]; then
-    end_time=$(date +%s%N)
-    elapsed_ns=$((end_time - start_time))
-    local fail_code="${auth_field:-MANIFEST}"
-    _print_status "FAILED" "$fail_code" "$label" "$elapsed_ns" "$label" 0
-    _record_result "FAILED" "$label" "$fail_code"
-    return 1
+    printf 'FAILED\t%s\t\n' "${auth_field:-MANIFEST}"
+    return 0
   fi
 
   local blob_url="${registry}/v2/${repository}/blobs/${digest}"
@@ -1148,45 +1144,98 @@ _check_oci_source() {
   [[ -n "$auth_field" ]] && curl_cmd+=(-H "$auth_field")
   [[ -n "$_PROXY_URL" ]] && curl_cmd+=(--proxy "$_PROXY_URL")
 
-  local curl_out status_code bytes verdict=FAILED
+  local curl_out status_code bytes
   curl_out=$(timeout "$_TIMEOUT" "${curl_cmd[@]}" "$blob_url" 2>/dev/null) || {
     # Read the status first: every command below, including an assignment,
     # overwrites $? and would turn the real failure into ERR0.
     local curl_exit=$?
-    local fail_code
-    fail_code=$(_curl_error_label "$curl_exit")
-    end_time=$(date +%s%N)
-    elapsed_ns=$((end_time - start_time))
-    _print_status "FAILED" "$fail_code" "$label" "$elapsed_ns" "$blob_url" 0
-    _record_result "FAILED" "$label" "$fail_code"
-    return 1
+    printf 'FAILED\t%s\t%s\n' "$(_curl_error_label "$curl_exit")" "$blob_url"
+    return 0
   }
 
   IFS=$'\t' read -r status_code bytes <<<"$curl_out"
-  end_time=$(date +%s%N)
-  elapsed_ns=$((end_time - start_time))
 
   # 206 is the expected answer to a Range request; some origins ignore the
   # range and send 200 with the whole blob instead, which still proves the
   # path works. Either is fine as long as bytes actually arrived: a reset
   # mid-transfer leaves status_code empty or stalls size_download at 0.
   if [[ "$status_code" =~ ^(200|206)$ ]] && [[ "${bytes:-0}" -gt 0 ]]; then
-    verdict="OK"
+    printf 'OK\t%s\t%s\n' "$status_code" "$blob_url"
+    return 0
   fi
 
-  if [[ "$verdict" == "OK" ]]; then
-    _print_status "OK" "$status_code" "$label" "$elapsed_ns" "$blob_url" 0
-    _record_result "OK" "$label" "$status_code"
-    return 0
-  else
-    local fail_code="${status_code:-RESET}"
-    if [[ "$status_code" == "429" ]]; then
-      fail_code="RATELIMIT"
-    fi
-    _print_status "FAILED" "$fail_code" "$label" "$elapsed_ns" "$blob_url" 0
-    _record_result "FAILED" "$label" "$fail_code"
-    return 1
+  local fail_code="${status_code:-RESET}"
+  if [[ "$status_code" == "429" ]]; then
+    fail_code="RATELIMIT"
   fi
+  printf 'FAILED\t%s\t%s\n' "$fail_code" "$blob_url"
+  return 0
+}
+
+# A failure worth a second attempt: one that says the network did not carry
+# the request, or that the registry asked us to come back later. A 404 on a
+# manifest, a denied token or an unparseable body will answer the same way
+# every time, so retrying them only costs the run time.
+_oci_retryable() {
+  case "$1" in
+    TIMEOUT|DNS|REFUSED|TLS|REDIRS|RESET|RATELIMIT|ERR*) return 0 ;;
+    MANIFEST5[0-9][0-9]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Check one "registry|repository|tag" OCI entry: resolve the manifest, then
+# GET the first 64 KiB of the heaviest blob with a Range header. A partial
+# GET is enough to cross the registry -> CDN -> storage-backend path a real
+# image pull takes without downloading whole layers, and it reproduces the
+# failure the oci profile exists for: a reset partway through a blob
+# transfer, which a HEAD or a manifest-only GET never triggers.
+#
+# An OCI probe makes four or five requests where a generic one makes a
+# single HEAD, so it is that much likelier to meet one slow moment, and it
+# is retried on the same _RETRIES budget for that reason. Without it a
+# registry answering in a second per request, which rocks.canonical.com
+# does, would report a failure the network never caused.
+_check_oci_source() {
+  local registry="$1" repository="$2" tag="$3"
+  # The source URL as declared, which is already the reference these three
+  # were taken from, so the report shows what an operator would retype.
+  local label="$4"
+
+  _log "Checking: $label (profile: oci)"
+
+  local start_time end_time elapsed_ns
+  start_time=$(date +%s%N)
+
+  local attempt=1 verdict code target
+  while [[ $attempt -le $_RETRIES ]]; do
+    if [[ $attempt -gt 1 ]]; then
+      _log "Retry attempt $attempt for $label"
+      sleep 1
+    fi
+
+    IFS=$'\t' read -r verdict code target \
+      < <(_oci_probe_once "$registry" "$repository" "$tag")
+
+    [[ "$verdict" == "OK" ]] && break
+    _oci_retryable "$code" || break
+
+    ((attempt++))
+  done
+
+  end_time=$(date +%s%N)
+  elapsed_ns=$((end_time - start_time))
+  : "${target:=$label}"
+
+  if [[ "$verdict" == "OK" ]]; then
+    _print_status "OK" "$code" "$label" "$elapsed_ns" "$target" 0
+    _record_result "OK" "$label" "$code"
+    return 0
+  fi
+
+  _print_status "FAILED" "$code" "$label" "$elapsed_ns" "$target" 0
+  _record_result "FAILED" "$label" "$code"
+  return 1
 }
 
 _check_sources_parallel() {
