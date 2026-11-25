@@ -4,6 +4,20 @@ Notable changes to `check_sources.sh`, newest first. Dates are the release tag
 dates. The same notes are published on each
 [GitHub release](https://github.com/canonical/check_sources/releases).
 
+## [4.0.2] - 2026-11-25
+
+- **Launchpad PPA Source**: `https://ppa.launchpad.net` is replaced by
+  `https://private-ppa.launchpad.net`. The old entry failed with `CERTNAME` on
+  every network since 4.0.0, because the host's certificate only covers
+  `private-ppa.launchpad.net`, so a healthy run was never fully green. PPA
+  packages themselves are served from `ppa.launchpadcontent.net`, which is
+  still checked over both protocols, and `http://ppa.launchpad.net` stays in
+  the list. Contributed by Bartosz Woronicz (#8, #9)
+
+The URL count is unchanged at 47; the host count goes from 35 to 36. A consumer
+matching `https://ppa.launchpad.net` by URL needs updating. The README also
+gained a Contributors section and states the MIT license.
+
 ## [4.0.1] - 2026-10-16
 
 - **Resolver Logs Say Which Failure**: The verbose log distinguishes a version
