@@ -282,9 +282,9 @@ readonly _SOURCES=(
   http://api.launchpad.net
   https://api.launchpad.net
   http://ppa.launchpad.net
-  https://ppa.launchpad.net
   http://ppa.launchpadcontent.net
   https://ppa.launchpadcontent.net
+  https://private-ppa.launchpad.net
   # Juju and Charmhub. These web frontends answer on HTTPS only: their
   # addresses do not accept a connection on port 80 at all, while
   # api.charmhub.io, on a different address set, does. So no http:// entry
