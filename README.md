@@ -490,6 +490,18 @@ The following enhancements are planned for future versions:
 
 *Contributions and feature requests are welcome! Please submit issues or pull requests to help prioritize development efforts.*
 
+## Contributors
+
+Thanks to everyone who has contributed code or reported problems on GitHub:
+
+| Contributor                                                | Contribution                                                                                 |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| [Marcelo Subtil Marcal](https://github.com/msmarcal)       | Author and maintainer                                                                        |
+| [Bartosz Woronicz](https://github.com/mastier)             | Replaced the deprecated `ppa.launchpad.net` with `private-ppa.launchpad.net` (#8, #9)        |
+| [Math Marchand](https://github.com/mathmarchand)           | Added `registry.jujucharms.com` to the HTTPS sources (#5)                                    |
+| [phvalguima](https://github.com/phvalguima)                | Added the newer Charmstore addresses                                                         |
+| [Chris Johnston](https://github.com/cjohnston1158)         | Reported that an APT repository could show as reachable while APT traffic was blocked (#6)   |
+
 ## License
 
-Please refer to the repository for current license information.
+Released under the MIT License. Copyright (c) 2020 Canonical Ltd. See [LICENSE.txt](LICENSE.txt) for the full text.
